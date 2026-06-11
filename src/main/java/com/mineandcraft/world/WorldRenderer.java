@@ -1,5 +1,6 @@
 package com.mineandcraft.world;
 
+import com.mineandcraft.config.GameSettings;
 import com.mineandcraft.graphics.Mesh;
 import com.mineandcraft.graphics.ShaderProgram;
 import com.mineandcraft.graphics.TextureAtlas;
@@ -7,7 +8,9 @@ import org.joml.Matrix4f;
 import org.joml.Vector3f;
 
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 
 import static org.lwjgl.opengl.GL11.*;
 import static org.lwjgl.opengl.GL13.GL_TEXTURE0;
@@ -17,44 +20,45 @@ public class WorldRenderer {
 
   private final World world;
   private final TextureAtlas atlas;
-  private final Map<Integer, ChunkMesh> chunks = new HashMap<>();
+  private final Map<Long, ChunkMesh> meshes = new HashMap<>();
   private final Mesh selectionMesh = new Mesh(Mesh.Layout.POSITION);
 
   public WorldRenderer(World world, TextureAtlas atlas) {
     this.world = world;
     this.atlas = atlas;
 
-    int chunksX = World.SIZE / World.CHUNK_SIZE;
-    int chunksZ = World.SIZE / World.CHUNK_SIZE;
-
-    for (int cx = 0; cx < chunksX; cx++) {
-      for (int cz = 0; cz < chunksZ; cz++) {
-        chunks.put(World.chunkKey(cx, cz), new ChunkMesh(cx, cz));
-      }
-    }
-
     world.addChunkListener(this::markChunkDirty);
-    rebuildAll();
     buildSelectionMesh();
   }
 
-  private void markChunkDirty(int chunkKey) {
-    ChunkMesh mesh = chunks.get(chunkKey);
+  public void updateAround(float worldX, float worldZ) {
+    world.updateChunksAround(worldX, worldZ);
+
+    Set<Long> activeKeys = new HashSet<>();
+    for (Chunk chunk : world.getLoadedChunks()) {
+      long key = World.chunkKey(chunk.getChunkX(), chunk.getChunkZ());
+      activeKeys.add(key);
+      meshes.computeIfAbsent(key, k -> new ChunkMesh(chunk.getChunkX(), chunk.getChunkZ()));
+    }
+
+    meshes.keySet().removeIf(key -> {
+      if (!activeKeys.contains(key)) {
+        return true;
+      }
+      return false;
+    });
+  }
+
+  private void markChunkDirty(long chunkKey) {
+    ChunkMesh mesh = meshes.get(chunkKey);
     if (mesh != null) {
       mesh.markDirty();
     }
   }
 
   public void rebuildDirtyChunks() {
-    for (ChunkMesh chunk : chunks.values()) {
-      chunk.rebuildIfNeeded(world, atlas);
-    }
-  }
-
-  private void rebuildAll() {
-    for (ChunkMesh chunk : chunks.values()) {
-      chunk.markDirty();
-      chunk.rebuildIfNeeded(world, atlas);
+    for (ChunkMesh mesh : meshes.values()) {
+      mesh.rebuildIfNeeded(world, atlas);
     }
   }
 
@@ -95,7 +99,14 @@ public class WorldRenderer {
     selectionMesh.upload(cube);
   }
 
-  public void render(ShaderProgram shader, Matrix4f projection, Matrix4f view, Vector3f cameraPos) {
+  public void render(
+      ShaderProgram shader,
+      Matrix4f projection,
+      Matrix4f view,
+      Vector3f cameraPos,
+      GameSettings settings
+  ) {
+    updateAround(cameraPos.x, cameraPos.z);
     rebuildDirtyChunks();
 
     shader.use();
@@ -103,12 +114,13 @@ public class WorldRenderer {
     shader.setTextureUnit(0);
     shader.setCameraPos(cameraPos);
     shader.setFogColor(0.53f, 0.71f, 0.98f);
+    shader.setFogEnabled(settings.isFogEnabled());
 
     glActiveTexture(GL_TEXTURE0);
     atlas.bind();
 
-    for (ChunkMesh chunk : chunks.values()) {
-      chunk.render();
+    for (ChunkMesh mesh : meshes.values()) {
+      mesh.render();
     }
   }
 

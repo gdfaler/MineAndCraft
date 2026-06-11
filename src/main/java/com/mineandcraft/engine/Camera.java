@@ -1,8 +1,8 @@
 package com.mineandcraft.engine;
 
+import com.mineandcraft.config.GameSettings;
 import com.mineandcraft.engine.physics.PlayerCollision;
 import com.mineandcraft.player.Hotbar;
-import com.mineandcraft.world.Block;
 import com.mineandcraft.world.World;
 import org.lwjgl.glfw.GLFW;
 
@@ -12,20 +12,19 @@ public class Camera {
   public static final float PLAYER_HEIGHT = 1.8f;
   public static final float PLAYER_WIDTH = 0.6f;
 
+  private static final float BASE_WALK_SPEED = 4.3f;
+  private static final float BASE_SPRINT_SPEED = 6.8f;
+  private static final float JUMP_SPEED = 8.5f;
+  private static final float GRAVITY = 24f;
+
   public final Vec3 position = new Vec3(0, 20, 0);
 
   public float yaw;
   public float pitch;
 
-  private final float walkSpeed = 4.3f;
-  private final float sprintSpeed = 6.8f;
-  private final float jumpSpeed = 8.5f;
-  private final float gravity = 24f;
-
+  private GameSettings settings;
   private World world;
   private final Hotbar hotbar = new Hotbar();
-  private boolean paused;
-  private boolean cursorCaptured = true;
 
   private double lastX = 640;
   private double lastY = 360;
@@ -38,54 +37,33 @@ public class Camera {
     this.world = world;
   }
 
-  public Hotbar getHotbar() {
-    return hotbar;
+  public void setSettings(GameSettings settings) {
+    this.settings = settings;
   }
 
-  public boolean isPaused() {
-    return paused;
+  public Hotbar getHotbar() {
+    return hotbar;
   }
 
   public byte getSelectedBlock() {
     return hotbar.getSelectedBlock();
   }
 
-  public void update(long window, float deltaTime) {
-    handlePause(window);
-
-    if (!paused) {
-      mouseLook(window);
-      applyMovement(window, deltaTime);
-      hotbar.handleKeys(window);
-    }
-  }
-
-  private void handlePause(long window) {
-    if (GLFW.glfwGetKey(window, GLFW.GLFW_KEY_ESCAPE) == GLFW.GLFW_PRESS) {
-      setPaused(window, !paused);
-      sleepKey(window, GLFW.GLFW_KEY_ESCAPE);
-    }
-  }
-
-  private void setPaused(long window, boolean paused) {
-    this.paused = paused;
-    cursorCaptured = !paused;
-    GLFW.glfwSetInputMode(
-        window,
-        GLFW.GLFW_CURSOR,
-        paused ? GLFW.GLFW_CURSOR_NORMAL : GLFW.GLFW_CURSOR_DISABLED
-    );
-
-    if (!paused) {
-      firstMouse = true;
-    }
-  }
-
-  private void mouseLook(long window) {
-    if (!cursorCaptured) {
+  public void update(long window, float deltaTime, boolean allowInput) {
+    if (!allowInput) {
       return;
     }
 
+    mouseLook(window);
+    applyMovement(window, deltaTime);
+    hotbar.handleKeys(window);
+  }
+
+  public void resetMouse() {
+    firstMouse = true;
+  }
+
+  private void mouseLook(long window) {
     double[] x = new double[1];
     double[] y = new double[1];
     GLFW.glfwGetCursorPos(window, x, y);
@@ -102,7 +80,7 @@ public class Camera {
     lastX = x[0];
     lastY = y[0];
 
-    float sensitivity = 0.12f;
+    float sensitivity = settings != null ? settings.getMouseSensitivity() : 0.12f;
     yaw += (float) dx * sensitivity;
     pitch -= (float) dy * sensitivity;
 
@@ -116,6 +94,7 @@ public class Camera {
 
   private void applyMovement(long window, float deltaTime) {
     float halfWidth = PLAYER_WIDTH * 0.5f;
+    float speedMultiplier = settings != null ? settings.getSpeedMultiplier() : 1f;
 
     float forwardX = (float) Math.sin(Math.toRadians(yaw));
     float forwardZ = -(float) Math.cos(Math.toRadians(yaw));
@@ -150,7 +129,7 @@ public class Camera {
 
     boolean sprinting = GLFW.glfwGetKey(window, GLFW.GLFW_KEY_LEFT_CONTROL) == GLFW.GLFW_PRESS
         || GLFW.glfwGetKey(window, GLFW.GLFW_KEY_RIGHT_CONTROL) == GLFW.GLFW_PRESS;
-    float speed = (sprinting ? sprintSpeed : walkSpeed) * deltaTime;
+    float speed = (sprinting ? BASE_SPRINT_SPEED : BASE_WALK_SPEED) * speedMultiplier * deltaTime;
 
     position.x += moveX * speed;
     position.z += moveZ * speed;
@@ -159,11 +138,11 @@ public class Camera {
     if (GLFW.glfwGetKey(window, GLFW.GLFW_KEY_SPACE) == GLFW.GLFW_PRESS
         && onGround
         && !PlayerCollision.isInsideSolid(world, position, halfWidth, PLAYER_HEIGHT)) {
-      velY = jumpSpeed;
+      velY = JUMP_SPEED;
       onGround = false;
     }
 
-    velY -= gravity * deltaTime;
+    velY -= GRAVITY * deltaTime;
     position.y += velY * deltaTime;
 
     PlayerCollision.VerticalResult vertical = PlayerCollision.resolveVertical(
@@ -212,11 +191,5 @@ public class Camera {
     return x + 1f > minX && x < maxX
         && y + 1f > minY && y < maxY
         && z + 1f > minZ && z < maxZ;
-  }
-
-  private static void sleepKey(long window, int key) {
-    while (GLFW.glfwGetKey(window, key) == GLFW.GLFW_PRESS) {
-      GLFW.glfwPollEvents();
-    }
   }
 }

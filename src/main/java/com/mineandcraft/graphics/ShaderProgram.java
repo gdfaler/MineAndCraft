@@ -39,6 +39,7 @@ public class ShaderProgram {
       uniform sampler2D uTexture;
       uniform vec3 uCameraPos;
       uniform vec3 uFogColor;
+      uniform float uFogEnabled;
 
       out vec4 FragColor;
 
@@ -48,9 +49,13 @@ public class ShaderProgram {
               discard;
           }
 
-          float dist = distance(vWorldPos, uCameraPos);
-          float fog = clamp((dist - 36.0) / 44.0, 0.0, 0.85);
-          FragColor = vec4(mix(color.rgb, uFogColor, fog), 1.0);
+          if (uFogEnabled > 0.5) {
+              float dist = distance(vWorldPos, uCameraPos);
+              float fog = clamp((dist - 36.0) / 44.0, 0.0, 0.85);
+              FragColor = vec4(mix(color.rgb, uFogColor, fog), 1.0);
+          } else {
+              FragColor = vec4(color.rgb, 1.0);
+          }
       }
       """;
 
@@ -137,6 +142,7 @@ public class ShaderProgram {
   private final int textureLoc;
   private final int cameraPosLoc;
   private final int fogColorLoc;
+  private final int fogEnabledLoc;
   private final int colorLoc;
   private final int modelLoc;
 
@@ -161,6 +167,7 @@ public class ShaderProgram {
     textureLoc = glGetUniformLocation(programId, "uTexture");
     cameraPosLoc = glGetUniformLocation(programId, "uCameraPos");
     fogColorLoc = glGetUniformLocation(programId, "uFogColor");
+    fogEnabledLoc = glGetUniformLocation(programId, "uFogEnabled");
     colorLoc = glGetUniformLocation(programId, "uColor");
     modelLoc = glGetUniformLocation(programId, "uModel");
   }
@@ -221,6 +228,12 @@ public class ShaderProgram {
   public void setFogColor(float r, float g, float b) {
     if (fogColorLoc >= 0) {
       glUniform3f(fogColorLoc, r, g, b);
+    }
+  }
+
+  public void setFogEnabled(boolean enabled) {
+    if (fogEnabledLoc >= 0) {
+      glUniform1f(fogEnabledLoc, enabled ? 1f : 0f);
     }
   }
 

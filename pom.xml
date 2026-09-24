@@ -7,7 +7,7 @@
 
   <groupId>com.mineandcraft</groupId>
   <artifactId>MineAndCraft</artifactId>
-  <version>0.0.1</version>
+  <version>0.1.0</version>
   <packaging>jar</packaging>
 
   <name>MineAndCraft</name>
@@ -15,12 +15,65 @@
 
   <properties>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-    <maven.compiler.source>25</maven.compiler.source>
-    <maven.compiler.target>25</maven.compiler.target>
+    <maven.compiler.release>21</maven.compiler.release>
 
     <lwjgl.version>3.3.6</lwjgl.version>
     <joml.version>1.10.8</joml.version>
+    <junit.version>5.11.4</junit.version>
+
+    <!-- Переопределяется профилями ниже в зависимости от ОС. -->
+    <lwjgl.natives>natives-windows</lwjgl.natives>
   </properties>
+
+  <profiles>
+    <profile>
+      <id>lwjgl-natives-windows</id>
+      <activation>
+        <os>
+          <family>windows</family>
+        </os>
+      </activation>
+      <properties>
+        <lwjgl.natives>natives-windows</lwjgl.natives>
+      </properties>
+    </profile>
+    <profile>
+      <id>lwjgl-natives-linux</id>
+      <activation>
+        <os>
+          <family>unix</family>
+          <name>linux</name>
+        </os>
+      </activation>
+      <properties>
+        <lwjgl.natives>natives-linux</lwjgl.natives>
+      </properties>
+    </profile>
+    <profile>
+      <id>lwjgl-natives-macos-x64</id>
+      <activation>
+        <os>
+          <family>mac</family>
+          <arch>x86_64</arch>
+        </os>
+      </activation>
+      <properties>
+        <lwjgl.natives>natives-macos</lwjgl.natives>
+      </properties>
+    </profile>
+    <profile>
+      <id>lwjgl-natives-macos-arm64</id>
+      <activation>
+        <os>
+          <family>mac</family>
+          <arch>aarch64</arch>
+        </os>
+      </activation>
+      <properties>
+        <lwjgl.natives>natives-macos-arm64</lwjgl.natives>
+      </properties>
+    </profile>
+  </profiles>
 
   <dependencyManagement>
     <dependencies>
@@ -28,6 +81,13 @@
         <groupId>org.lwjgl</groupId>
         <artifactId>lwjgl-bom</artifactId>
         <version>${lwjgl.version}</version>
+        <scope>import</scope>
+        <type>pom</type>
+      </dependency>
+      <dependency>
+        <groupId>org.junit</groupId>
+        <artifactId>junit-bom</artifactId>
+        <version>${junit.version}</version>
         <scope>import</scope>
         <type>pom</type>
       </dependency>
@@ -65,25 +125,31 @@
     <dependency>
       <groupId>org.lwjgl</groupId>
       <artifactId>lwjgl</artifactId>
-      <classifier>natives-windows</classifier>
+      <classifier>${lwjgl.natives}</classifier>
     </dependency>
 
     <dependency>
       <groupId>org.lwjgl</groupId>
       <artifactId>lwjgl-glfw</artifactId>
-      <classifier>natives-windows</classifier>
+      <classifier>${lwjgl.natives}</classifier>
     </dependency>
 
     <dependency>
       <groupId>org.lwjgl</groupId>
       <artifactId>lwjgl-opengl</artifactId>
-      <classifier>natives-windows</classifier>
+      <classifier>${lwjgl.natives}</classifier>
     </dependency>
 
     <dependency>
       <groupId>org.lwjgl</groupId>
       <artifactId>lwjgl-stb</artifactId>
-      <classifier>natives-windows</classifier>
+      <classifier>${lwjgl.natives}</classifier>
+    </dependency>
+
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
     </dependency>
 
   </dependencies>
@@ -93,11 +159,12 @@
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-compiler-plugin</artifactId>
-        <version>3.11.0</version>
-        <configuration>
-          <source>25</source>
-          <target>25</target>
-        </configuration>
+        <version>3.13.0</version>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <version>3.5.2</version>
       </plugin>
       <plugin>
         <groupId>org.codehaus.mojo</groupId>
@@ -118,6 +185,37 @@
             </manifest>
           </archive>
         </configuration>
+      </plugin>
+      <plugin>
+        <!-- Собирает исполняемый jar со всеми зависимостями: target/MineAndCraft-<версия>-all.jar -->
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-shade-plugin</artifactId>
+        <version>3.6.0</version>
+        <executions>
+          <execution>
+            <phase>package</phase>
+            <goals>
+              <goal>shade</goal>
+            </goals>
+            <configuration>
+              <shadedArtifactAttached>true</shadedArtifactAttached>
+              <shadedClassifierName>all</shadedClassifierName>
+              <createDependencyReducedPom>false</createDependencyReducedPom>
+              <filters>
+                <filter>
+                  <artifact>*:*</artifact>
+                  <excludes>
+                    <exclude>META-INF/*.SF</exclude>
+                    <exclude>META-INF/*.DSA</exclude>
+                    <exclude>META-INF/*.RSA</exclude>
+                    <exclude>module-info.class</exclude>
+                    <exclude>META-INF/versions/*/module-info.class</exclude>
+                  </excludes>
+                </filter>
+              </filters>
+            </configuration>
+          </execution>
+        </executions>
       </plugin>
     </plugins>
   </build>

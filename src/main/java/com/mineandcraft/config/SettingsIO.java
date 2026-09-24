@@ -9,20 +9,27 @@ import java.util.Properties;
 
 public final class SettingsIO {
 
-  private static final Path SETTINGS_PATH = Path.of(System.getProperty("user.home"), ".mineandcraft", "settings.properties");
+  /** Каталог данных игры: {@code ~/.mineandcraft}. */
+  public static final Path DATA_DIR = Path.of(System.getProperty("user.home"), ".mineandcraft");
+  private static final Path SETTINGS_PATH = DATA_DIR.resolve("settings.properties");
 
   private SettingsIO() {
   }
 
   public static void load(GameSettings settings) {
-    if (!Files.exists(SETTINGS_PATH)) {
+    load(settings, SETTINGS_PATH);
+  }
+
+  public static void load(GameSettings settings, Path path) {
+    if (!Files.exists(path)) {
       return;
     }
 
     Properties properties = new Properties();
-    try (InputStream in = Files.newInputStream(SETTINGS_PATH)) {
+    try (InputStream in = Files.newInputStream(path)) {
       properties.load(in);
     } catch (IOException e) {
+      System.err.println("Не удалось прочитать настройки " + path + ": " + e.getMessage());
       return;
     }
 
@@ -33,14 +40,14 @@ public final class SettingsIO {
     settings.setVsync(readBoolean(properties, "vsync", settings.isVsync()));
     settings.setShowDebug(readBoolean(properties, "showDebug", settings.isShowDebug()));
     settings.setSpeedMultiplier(readFloat(properties, "speedMultiplier", settings.getSpeedMultiplier()));
+    settings.setRawMouseInput(readBoolean(properties, "rawMouseInput", settings.isRawMouseInput()));
   }
 
   public static void save(GameSettings settings) {
-    try {
-      Files.createDirectories(SETTINGS_PATH.getParent());
-    } catch (IOException e) {
-      return;
-    }
+    save(settings, SETTINGS_PATH);
+  }
+
+  public static void save(GameSettings settings, Path path) {
 
     Properties properties = new Properties();
     properties.setProperty("mouseSensitivity", Float.toString(settings.getMouseSensitivity()));
@@ -50,14 +57,19 @@ public final class SettingsIO {
     properties.setProperty("vsync", Boolean.toString(settings.isVsync()));
     properties.setProperty("showDebug", Boolean.toString(settings.isShowDebug()));
     properties.setProperty("speedMultiplier", Float.toString(settings.getSpeedMultiplier()));
+    properties.setProperty("rawMouseInput", Boolean.toString(settings.isRawMouseInput()));
 
-    try (OutputStream out = Files.newOutputStream(SETTINGS_PATH)) {
-      properties.store(out, "MineAndCraft settings");
-    } catch (IOException ignored) {
+    try {
+      Files.createDirectories(path.getParent());
+      try (OutputStream out = Files.newOutputStream(path)) {
+        properties.store(out, "MineAndCraft settings");
+      }
+    } catch (IOException e) {
+      System.err.println("Не удалось сохранить настройки " + path + ": " + e.getMessage());
     }
   }
 
-  private static float readFloat(Properties properties, String key, float fallback) {
+  static float readFloat(Properties properties, String key, float fallback) {
     String value = properties.getProperty(key);
     if (value == null) {
       return fallback;
@@ -70,7 +82,7 @@ public final class SettingsIO {
     }
   }
 
-  private static int readInt(Properties properties, String key, int fallback) {
+  static int readInt(Properties properties, String key, int fallback) {
     String value = properties.getProperty(key);
     if (value == null) {
       return fallback;
@@ -83,7 +95,7 @@ public final class SettingsIO {
     }
   }
 
-  private static boolean readBoolean(Properties properties, String key, boolean fallback) {
+  static boolean readBoolean(Properties properties, String key, boolean fallback) {
     String value = properties.getProperty(key);
     if (value == null) {
       return fallback;

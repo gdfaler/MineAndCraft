@@ -1,34 +1,102 @@
 package com.mineandcraft.world;
 
+import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.function.LongConsumer;
+import java.util.Queue;
+import java.util.Set;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
-public class World {
+/**
+ * Хранит загруженные чанки вокруг игрока. Чанки загружаются (с диска или генератором)
+ * в фоновых потоках, а все изменения мира и уведомления происходят в главном потоке.
+ */
+public class World implements AutoCloseable {
 
-  public static final int HEIGHT = 64;
+  public static final int HEIGHT = 128;
   public static final int CHUNK_SIZE = 16;
-  public static final int SEA_LEVEL = 20;
-  private int viewDistance = 8;
-  private int unloadDistance = 10;
+  public static final int SEA_LEVEL = 40;
 
-  private final Map<Long, Chunk> chunks = new ConcurrentHashMap<>();
-  private final List<LongConsumer> chunkListeners = new ArrayList<>();
+  public static final int MIN_VIEW_DISTANCE = 4;
+  public static final int MAX_VIEW_DISTANCE = 16;
+
+  /** Слушатель событий мира. Все методы вызываются в главном потоке. */
+  public interface Listener {
+    default void chunkLoaded(Chunk chunk) {
+    }
+
+    default void chunkUnloaded(Chunk chunk) {
+    }
+
+    default void blockChanged(int x, int y, int z) {
+    }
+  }
+
   private final ChunkGenerator generator;
+  private final ChunkStorage storage;
+  private final Executor executor;
+  private final ExecutorService ownedExecutor;
+  private final int maxPending;
 
-  public World() {
-    this(2026L);
+  private final Map<Long, Chunk> chunks = new HashMap<>();
+  private final Set<Long> pending = new HashSet<>();
+  private final Queue<Chunk> ready = new ConcurrentLinkedQueue<>();
+  private final List<Listener> listeners = new ArrayList<>();
+
+  private int viewDistance = 8;
+  private int centerChunkX;
+  private int centerChunkZ;
+
+  /** Мир с фоновой генерацией в пуле потоков. */
+  public World(long seed, ChunkStorage storage) {
+    this(seed, storage, createPool());
   }
 
-  public World(long seed) {
-    generator = new ChunkGenerator(seed);
+  private World(long seed, ChunkStorage storage, ExecutorService pool) {
+    this.generator = new ChunkGenerator(seed);
+    this.storage = storage;
+    this.executor = pool;
+    this.ownedExecutor = pool;
+    this.maxPending = Math.max(4, Runtime.getRuntime().availableProcessors() * 2);
   }
 
-  public void addChunkListener(LongConsumer listener) {
-    chunkListeners.add(listener);
+  /** Мир с указанным исполнителем задач. {@code Runnable::run} даёт синхронную загрузку (для тестов). */
+  public World(long seed, ChunkStorage storage, Executor executor) {
+    this.generator = new ChunkGenerator(seed);
+    this.storage = storage;
+    this.executor = executor;
+    this.ownedExecutor = null;
+    this.maxPending = Integer.MAX_VALUE;
+  }
+
+  private static ExecutorService createPool() {
+    int threads = Math.max(1, Math.min(4, Runtime.getRuntime().availableProcessors() - 1));
+    AtomicInteger counter = new AtomicInteger();
+    return Executors.newFixedThreadPool(threads, runnable -> {
+      Thread thread = new Thread(runnable, "chunk-worker-" + counter.incrementAndGet());
+      thread.setDaemon(true);
+      thread.setPriority(Thread.NORM_PRIORITY - 1);
+      return thread;
+    });
+  }
+
+  public long getSeed() {
+    return generator.getSeed();
+  }
+
+  public void addListener(Listener listener) {
+    listeners.add(listener);
   }
 
   public int getViewDistance() {
@@ -36,96 +104,210 @@ public class World {
   }
 
   public void setViewDistance(int viewDistance) {
-    this.viewDistance = Math.max(4, Math.min(12, viewDistance));
-    this.unloadDistance = this.viewDistance + 2;
+    this.viewDistance = Math.max(MIN_VIEW_DISTANCE, Math.min(MAX_VIEW_DISTANCE, viewDistance));
   }
 
-  public void updateChunksAround(float worldX, float worldZ) {
-    int centerChunkX = Math.floorDiv((int) Math.floor(worldX), CHUNK_SIZE);
-    int centerChunkZ = Math.floorDiv((int) Math.floor(worldZ), CHUNK_SIZE);
+  /** Радиус загрузки данных на 1 больше дальности прорисовки: мешу нужны соседние чанки. */
+  private int loadDistance() {
+    return viewDistance + 1;
+  }
 
-    for (int dx = -viewDistance; dx <= viewDistance; dx++) {
-      for (int dz = -viewDistance; dz <= viewDistance; dz++) {
-        if (dx * dx + dz * dz > viewDistance * viewDistance) {
+  private int unloadDistance() {
+    return viewDistance + 3;
+  }
+
+  /**
+   * Вызывается каждый кадр: выгружает дальние чанки, ставит в очередь недостающие
+   * (ближние в первую очередь) и принимает готовые из фоновых потоков.
+   */
+  public void update(float worldX, float worldZ) {
+    centerChunkX = Math.floorDiv((int) Math.floor(worldX), CHUNK_SIZE);
+    centerChunkZ = Math.floorDiv((int) Math.floor(worldZ), CHUNK_SIZE);
+
+    unloadDistantChunks();
+    requestMissingChunks();
+    acceptReadyChunks();
+  }
+
+  /** Синхронно загружает чанки в радиусе вокруг точки. Используется при старте, чтобы игрок не упал в пустоту. */
+  public void loadArea(float worldX, float worldZ, int radius) {
+    int cx = Math.floorDiv((int) Math.floor(worldX), CHUNK_SIZE);
+    int cz = Math.floorDiv((int) Math.floor(worldZ), CHUNK_SIZE);
+    centerChunkX = cx;
+    centerChunkZ = cz;
+
+    for (int dx = -radius; dx <= radius; dx++) {
+      for (int dz = -radius; dz <= radius; dz++) {
+        long key = chunkKey(cx + dx, cz + dz);
+        if (!chunks.containsKey(key) && !pending.contains(key)) {
+          addChunk(loadOrGenerate(cx + dx, cz + dz));
+        }
+      }
+    }
+  }
+
+  private void requestMissingChunks() {
+    int radius = loadDistance();
+    List<long[]> missing = new ArrayList<>();
+
+    for (int dx = -radius; dx <= radius; dx++) {
+      for (int dz = -radius; dz <= radius; dz++) {
+        int distanceSq = dx * dx + dz * dz;
+        if (distanceSq > radius * radius) {
           continue;
         }
 
-        getOrCreateChunk(centerChunkX + dx, centerChunkZ + dz);
+        long key = chunkKey(centerChunkX + dx, centerChunkZ + dz);
+        if (!chunks.containsKey(key) && !pending.contains(key)) {
+          missing.add(new long[] {key, distanceSq});
+        }
       }
     }
 
-    unloadDistantChunks(centerChunkX, centerChunkZ);
+    missing.sort((a, b) -> Long.compare(a[1], b[1]));
+
+    for (long[] entry : missing) {
+      if (pending.size() >= maxPending) {
+        break;
+      }
+
+      long key = entry[0];
+      int chunkX = chunkXFromKey(key);
+      int chunkZ = chunkZFromKey(key);
+      pending.add(key);
+      executor.execute(() -> ready.add(loadOrGenerate(chunkX, chunkZ)));
+    }
   }
 
-  private void unloadDistantChunks(int centerChunkX, int centerChunkZ) {
-    Iterator<Map.Entry<Long, Chunk>> iterator = chunks.entrySet().iterator();
+  private void acceptReadyChunks() {
+    Chunk chunk;
+    while ((chunk = ready.poll()) != null) {
+      long key = chunk.key();
+      pending.remove(key);
+
+      if (chunks.containsKey(key) || chebyshevDistance(chunk.getChunkX(), chunk.getChunkZ()) > unloadDistance()) {
+        continue;
+      }
+
+      addChunk(chunk);
+    }
+  }
+
+  private void addChunk(Chunk chunk) {
+    chunks.put(chunk.key(), chunk);
+    for (Listener listener : listeners) {
+      listener.chunkLoaded(chunk);
+    }
+  }
+
+  private void unloadDistantChunks() {
+    Iterator<Chunk> iterator = chunks.values().iterator();
 
     while (iterator.hasNext()) {
-      Map.Entry<Long, Chunk> entry = iterator.next();
-      int chunkX = chunkXFromKey(entry.getKey());
-      int chunkZ = chunkZFromKey(entry.getKey());
-      int distance = Math.max(Math.abs(chunkX - centerChunkX), Math.abs(chunkZ - centerChunkZ));
+      Chunk chunk = iterator.next();
+      if (chebyshevDistance(chunk.getChunkX(), chunk.getChunkZ()) <= unloadDistance()) {
+        continue;
+      }
 
-      if (distance > unloadDistance) {
-        iterator.remove();
+      saveIfModified(chunk);
+      iterator.remove();
+      for (Listener listener : listeners) {
+        listener.chunkUnloaded(chunk);
       }
     }
   }
 
-  public Chunk getOrCreateChunk(int chunkX, int chunkZ) {
-    long key = chunkKey(chunkX, chunkZ);
-    Chunk chunk = chunks.get(key);
+  private int chebyshevDistance(int chunkX, int chunkZ) {
+    return Math.max(Math.abs(chunkX - centerChunkX), Math.abs(chunkZ - centerChunkZ));
+  }
 
-    if (chunk != null) {
-      return chunk;
+  /** Выполняется в фоновом потоке: только чтение хранилища и чистая генерация. */
+  private Chunk loadOrGenerate(int chunkX, int chunkZ) {
+    try {
+      byte[] data = storage.load(chunkX, chunkZ);
+      if (data != null) {
+        return new Chunk(chunkX, chunkZ, data);
+      }
+    } catch (IOException | RuntimeException e) {
+      System.err.println("Не удалось загрузить чанк " + chunkX + ", " + chunkZ + ": " + e.getMessage()
+          + ". Чанк будет сгенерирован заново.");
     }
 
-    chunk = new Chunk(chunkX, chunkZ);
-    chunks.put(key, chunk);
-    generator.generate(chunk, this);
-    notifyChunkGenerated(chunkX, chunkZ);
-    return chunk;
+    return generator.generate(chunkX, chunkZ);
   }
 
-  public Iterable<Chunk> getLoadedChunks() {
-    return chunks.values();
+  private void saveIfModified(Chunk chunk) {
+    if (!chunk.isModified()) {
+      return;
+    }
+
+    try {
+      storage.save(chunk.getChunkX(), chunk.getChunkZ(), chunk.rawData());
+      chunk.setModified(false);
+    } catch (IOException e) {
+      System.err.println("Не удалось сохранить чанк " + chunk.getChunkX() + ", " + chunk.getChunkZ()
+          + ": " + e.getMessage());
+    }
   }
 
-  public int getHeight(int x, int z) {
-    return getSurfaceHeight(x, z);
+  public void saveAll() {
+    for (Chunk chunk : chunks.values()) {
+      saveIfModified(chunk);
+    }
+  }
+
+  @Override
+  public void close() {
+    saveAll();
+
+    if (ownedExecutor != null) {
+      ownedExecutor.shutdownNow();
+      try {
+        ownedExecutor.awaitTermination(2, TimeUnit.SECONDS);
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+      }
+    }
+  }
+
+  public Collection<Chunk> getLoadedChunks() {
+    return Collections.unmodifiableCollection(chunks.values());
+  }
+
+  public int getLoadedChunkCount() {
+    return chunks.size();
+  }
+
+  public int getPendingChunkCount() {
+    return pending.size();
+  }
+
+  public Chunk getChunk(int chunkX, int chunkZ) {
+    return chunks.get(chunkKey(chunkX, chunkZ));
+  }
+
+  public boolean isChunkLoaded(int chunkX, int chunkZ) {
+    return chunks.containsKey(chunkKey(chunkX, chunkZ));
+  }
+
+  /** Загружен ли чанк, содержащий мировую точку (x, z). */
+  public boolean isLoadedAt(int x, int z) {
+    return isChunkLoaded(Math.floorDiv(x, CHUNK_SIZE), Math.floorDiv(z, CHUNK_SIZE));
   }
 
   public int getSurfaceHeight(int x, int z) {
-    double height = 0;
-    double amplitude = 1;
-    double frequency = 0.035;
-    double total = 0;
+    return generator.surfaceHeight(x, z);
+  }
 
-    for (int octave = 0; octave < 4; octave++) {
-      double nx = x * frequency;
-      double nz = z * frequency;
-
-      double sample =
-          Math.sin(nx) * Math.cos(nz * 1.17)
-              + Math.sin(nx * 0.55 + nz * 0.73) * 0.65
-              + Math.cos(nx * 1.9 + nz * 0.41) * 0.35;
-
-      height += sample * amplitude;
-      total += amplitude;
-      amplitude *= 0.5;
-      frequency *= 2.1;
+  /** Возвращает Y первого свободного блока над самым верхним твёрдым блоком столбца. */
+  public int getTopY(int x, int z) {
+    for (int y = HEIGHT - 1; y >= 0; y--) {
+      if (Block.isSolid(getBlock(x, y, z))) {
+        return y + 1;
+      }
     }
 
-    int surface = (int) (height / total * 8 + 22);
-
-    if (surface < 4) {
-      surface = 4;
-    }
-    if (surface > HEIGHT - 3) {
-      surface = HEIGHT - 3;
-    }
-
-    return surface;
+    return getSurfaceHeight(x, z) + 1;
   }
 
   public byte getBlock(int x, int y, int z) {
@@ -133,73 +315,43 @@ public class World {
       return Block.AIR;
     }
 
-    int chunkX = Math.floorDiv(x, CHUNK_SIZE);
-    int chunkZ = Math.floorDiv(z, CHUNK_SIZE);
-    Chunk chunk = chunks.get(chunkKey(chunkX, chunkZ));
-
-    if (chunk == null || !chunk.isGenerated()) {
+    Chunk chunk = chunks.get(chunkKey(Math.floorDiv(x, CHUNK_SIZE), Math.floorDiv(z, CHUNK_SIZE)));
+    if (chunk == null) {
       return Block.AIR;
     }
 
-    int localX = Math.floorMod(x, CHUNK_SIZE);
-    int localZ = Math.floorMod(z, CHUNK_SIZE);
-    return chunk.getLocal(localX, y, localZ);
+    return chunk.getLocal(Math.floorMod(x, CHUNK_SIZE), y, Math.floorMod(z, CHUNK_SIZE));
   }
 
+  /**
+   * Ставит блок. Возвращает false, если чанк не загружен, координата вне мира,
+   * блок уже такой или это попытка заменить бедрок.
+   */
   public boolean setBlock(int x, int y, int z, byte block) {
-    if (!setBlockQuiet(x, y, z, block)) {
-      return false;
-    }
-
-    notifyChunk(x, z);
-    return true;
-  }
-
-  boolean setBlockQuiet(int x, int y, int z, byte block) {
     if (y < 0 || y >= HEIGHT) {
       return false;
     }
 
-    int chunkX = Math.floorDiv(x, CHUNK_SIZE);
-    int chunkZ = Math.floorDiv(z, CHUNK_SIZE);
-    Chunk chunk = getOrCreateChunk(chunkX, chunkZ);
-
-    int localX = Math.floorMod(x, CHUNK_SIZE);
-    int localZ = Math.floorMod(z, CHUNK_SIZE);
-
-    if (chunk.getLocal(localX, y, localZ) == block) {
+    Chunk chunk = chunks.get(chunkKey(Math.floorDiv(x, CHUNK_SIZE), Math.floorDiv(z, CHUNK_SIZE)));
+    if (chunk == null) {
       return false;
     }
 
-    if (chunk.getLocal(localX, y, localZ) == Block.BEDROCK && block != Block.BEDROCK) {
+    int localX = Math.floorMod(x, CHUNK_SIZE);
+    int localZ = Math.floorMod(z, CHUNK_SIZE);
+    byte current = chunk.getLocal(localX, y, localZ);
+
+    if (current == block || current == Block.BEDROCK) {
       return false;
     }
 
     chunk.setLocal(localX, y, localZ, block);
-    return true;
-  }
+    chunk.setModified(true);
 
-  private void notifyChunk(int x, int z) {
-    int chunkX = Math.floorDiv(x, CHUNK_SIZE);
-    int chunkZ = Math.floorDiv(z, CHUNK_SIZE);
-
-    markChunk(chunkX, chunkZ);
-    markChunk(chunkX - 1, chunkZ);
-    markChunk(chunkX + 1, chunkZ);
-    markChunk(chunkX, chunkZ - 1);
-    markChunk(chunkX, chunkZ + 1);
-  }
-
-  private void notifyChunkGenerated(int chunkX, int chunkZ) {
-    markChunk(chunkX, chunkZ);
-  }
-
-  private void markChunk(int chunkX, int chunkZ) {
-    long key = chunkKey(chunkX, chunkZ);
-
-    for (LongConsumer listener : chunkListeners) {
-      listener.accept(key);
+    for (Listener listener : listeners) {
+      listener.blockChanged(x, y, z);
     }
+    return true;
   }
 
   public static long chunkKey(int chunkX, int chunkZ) {

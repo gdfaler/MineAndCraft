@@ -40,6 +40,8 @@ public class ShaderProgram {
       uniform vec3 uCameraPos;
       uniform vec3 uFogColor;
       uniform float uFogEnabled;
+      uniform float uFogStart;
+      uniform float uFogEnd;
 
       out vec4 FragColor;
 
@@ -50,8 +52,8 @@ public class ShaderProgram {
           }
 
           if (uFogEnabled > 0.5) {
-              float dist = distance(vWorldPos, uCameraPos);
-              float fog = clamp((dist - 36.0) / 44.0, 0.0, 0.85);
+              float dist = distance(vWorldPos.xz, uCameraPos.xz);
+              float fog = clamp((dist - uFogStart) / (uFogEnd - uFogStart), 0.0, 1.0);
               FragColor = vec4(mix(color.rgb, uFogColor, fog), 1.0);
           } else {
               FragColor = vec4(color.rgb, 1.0);
@@ -64,8 +66,10 @@ public class ShaderProgram {
 
       layout(location = 0) in vec2 aPos;
 
+      uniform vec2 uScale;
+
       void main() {
-          gl_Position = vec4(aPos, 0.0, 1.0);
+          gl_Position = vec4(aPos * uScale, 0.0, 1.0);
       }
       """;
 
@@ -87,11 +91,13 @@ public class ShaderProgram {
       layout(location = 0) in vec2 aPos;
       layout(location = 1) in vec2 aTex;
 
+      uniform vec2 uScale;
+
       out vec2 vTex;
 
       void main() {
           vTex = aTex;
-          gl_Position = vec4(aPos, 0.0, 1.0);
+          gl_Position = vec4(aPos * uScale, 0.0, 1.0);
       }
       """;
 
@@ -145,8 +151,12 @@ public class ShaderProgram {
   private final int fogEnabledLoc;
   private final int colorLoc;
   private final int modelLoc;
+  private final int fogStartLoc;
+  private final int fogEndLoc;
+  private final int scaleLoc;
+  private final float[] matrixBuffer = new float[16];
 
-  private ShaderProgram(String vertex, String fragment, boolean blockShader) {
+  private ShaderProgram(String vertex, String fragment) {
     int vertexShader = compile(vertex, GL_VERTEX_SHADER);
     int fragmentShader = compile(fragment, GL_FRAGMENT_SHADER);
 
@@ -170,22 +180,31 @@ public class ShaderProgram {
     fogEnabledLoc = glGetUniformLocation(programId, "uFogEnabled");
     colorLoc = glGetUniformLocation(programId, "uColor");
     modelLoc = glGetUniformLocation(programId, "uModel");
+    fogStartLoc = glGetUniformLocation(programId, "uFogStart");
+    fogEndLoc = glGetUniformLocation(programId, "uFogEnd");
+    scaleLoc = glGetUniformLocation(programId, "uScale");
+
+    if (scaleLoc >= 0) {
+      glUseProgram(programId);
+      glUniform2f(scaleLoc, 1f, 1f);
+      glUseProgram(0);
+    }
   }
 
   public static ShaderProgram createBlockShader() {
-    return new ShaderProgram(BLOCK_VERTEX, BLOCK_FRAGMENT, true);
+    return new ShaderProgram(BLOCK_VERTEX, BLOCK_FRAGMENT);
   }
 
   public static ShaderProgram createHudShader() {
-    return new ShaderProgram(HUD_VERTEX, HUD_FRAGMENT, false);
+    return new ShaderProgram(HUD_VERTEX, HUD_FRAGMENT);
   }
 
   public static ShaderProgram createHudTexturedShader() {
-    return new ShaderProgram(HUD_TEXTURED_VERTEX, HUD_TEXTURED_FRAGMENT, false);
+    return new ShaderProgram(HUD_TEXTURED_VERTEX, HUD_TEXTURED_FRAGMENT);
   }
 
   public static ShaderProgram createLineShader() {
-    return new ShaderProgram(LINE_VERTEX, LINE_FRAGMENT, false);
+    return new ShaderProgram(LINE_VERTEX, LINE_FRAGMENT);
   }
 
   private int compile(String source, int type) {
@@ -206,10 +225,10 @@ public class ShaderProgram {
 
   public void setMatrices(Matrix4f projection, Matrix4f view) {
     if (projectionLoc >= 0) {
-      glUniformMatrix4fv(projectionLoc, false, projection.get(new float[16]));
+      glUniformMatrix4fv(projectionLoc, false, projection.get(matrixBuffer));
     }
     if (viewLoc >= 0) {
-      glUniformMatrix4fv(viewLoc, false, view.get(new float[16]));
+      glUniformMatrix4fv(viewLoc, false, view.get(matrixBuffer));
     }
   }
 
@@ -245,7 +264,27 @@ public class ShaderProgram {
 
   public void setModel(Matrix4f model) {
     if (modelLoc >= 0) {
-      glUniformMatrix4fv(modelLoc, false, model.get(new float[16]));
+      glUniformMatrix4fv(modelLoc, false, model.get(matrixBuffer));
     }
+  }
+
+  public void setFogRange(float start, float end) {
+    if (fogStartLoc >= 0) {
+      glUniform1f(fogStartLoc, start);
+    }
+    if (fogEndLoc >= 0) {
+      glUniform1f(fogEndLoc, end);
+    }
+  }
+
+  /** Масштаб для 2D-шейдеров: сохраняет пропорции интерфейса при любом соотношении сторон окна. */
+  public void setScale(float x, float y) {
+    if (scaleLoc >= 0) {
+      glUniform2f(scaleLoc, x, y);
+    }
+  }
+
+  public void delete() {
+    glDeleteProgram(programId);
   }
 }

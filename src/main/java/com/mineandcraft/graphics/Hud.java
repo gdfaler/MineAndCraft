@@ -3,190 +3,97 @@ package com.mineandcraft.graphics;
 import com.mineandcraft.player.Hotbar;
 import com.mineandcraft.world.Block;
 
-import static org.lwjgl.opengl.GL11.*;
+import static org.lwjgl.opengl.GL11.GL_BLEND;
+import static org.lwjgl.opengl.GL11.GL_ONE_MINUS_DST_COLOR;
+import static org.lwjgl.opengl.GL11.GL_ONE_MINUS_SRC_ALPHA;
+import static org.lwjgl.opengl.GL11.GL_SRC_ALPHA;
+import static org.lwjgl.opengl.GL11.GL_ZERO;
+import static org.lwjgl.opengl.GL11.glBlendFunc;
 import static org.lwjgl.opengl.GL13.GL_TEXTURE0;
 import static org.lwjgl.opengl.GL13.glActiveTexture;
-import static org.lwjgl.opengl.GL20.glDisableVertexAttribArray;
-import static org.lwjgl.opengl.GL20.glEnableVertexAttribArray;
-import static org.lwjgl.opengl.GL20.glVertexAttribPointer;
-import static org.lwjgl.opengl.GL30.glBindVertexArray;
-import static org.lwjgl.opengl.GL30.glDeleteVertexArrays;
-import static org.lwjgl.opengl.GL30.glGenVertexArrays;
-import static org.lwjgl.opengl.GL15.*;
 
-public class Hud {
+/**
+ * Игровой HUD. Координаты заданы для эталонного соотношения сторон 16:9;
+ * 2D-шейдеры масштабируют их так, чтобы пропорции сохранялись в любом окне.
+ */
+public final class Hud {
 
-  private final int crosshairVao;
-  private final int crosshairVbo;
-  private final int quadVao;
-  private final int quadVbo;
+  /** Во сколько раз единица NDC по X больше, чем по Y, в эталонном окне 16:9. */
+  private static final float X_PER_Y = 9f / 16f;
 
-  public Hud() {
-    float size = 0.008f;
-    float gap = 0.003f;
-
-    float[] crosshair = {
-        -size, -gap,   size, gap,
-         size, -gap,   size, gap,
-        -size,  gap,  -size, gap,
-         size,  gap,   size, gap,
-    };
-
-    crosshairVao = glGenVertexArrays();
-    crosshairVbo = glGenBuffers();
-    glBindVertexArray(crosshairVao);
-    glBindBuffer(GL_ARRAY_BUFFER, crosshairVbo);
-    glBufferData(GL_ARRAY_BUFFER, crosshair, GL_STATIC_DRAW);
-    glVertexAttribPointer(0, 2, GL_FLOAT, false, 2 * Float.BYTES, 0);
-    glEnableVertexAttribArray(0);
-    glBindVertexArray(0);
-
-    quadVao = glGenVertexArrays();
-    quadVbo = glGenBuffers();
-    glBindVertexArray(quadVao);
-    glBindBuffer(GL_ARRAY_BUFFER, quadVbo);
-    glVertexAttribPointer(0, 2, GL_FLOAT, false, 4 * Float.BYTES, 0);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(1, 2, GL_FLOAT, false, 4 * Float.BYTES, 2 * Float.BYTES);
-    glEnableVertexAttribArray(1);
-    glBindVertexArray(0);
+  private Hud() {
   }
 
-  public void drawCrosshair(ShaderProgram shader) {
-    shader.use();
-    shader.setColor(1f, 1f, 1f, 0.95f);
+  public static void drawCrosshair(ShaderProgram shader) {
+    UiDrawer.begin();
+    // Инверсия цвета под прицелом, как в Minecraft: прицел виден на любом фоне.
+    glBlendFunc(GL_ONE_MINUS_DST_COLOR, GL_ZERO);
 
-    glDisable(GL_DEPTH_TEST);
-    glBindVertexArray(crosshairVao);
-    glDrawArrays(GL_LINES, 0, 4);
-    glBindVertexArray(0);
-    glEnable(GL_DEPTH_TEST);
-  }
+    float length = 0.022f;
+    float thickness = 0.002f;
+    UiDrawer.fill(shader, -length * X_PER_Y, -thickness, length * X_PER_Y, thickness, 1f, 1f, 1f, 1f);
+    UiDrawer.fill(shader, -thickness * X_PER_Y, -length, thickness * X_PER_Y, -thickness, 1f, 1f, 1f, 1f);
+    UiDrawer.fill(shader, -thickness * X_PER_Y, thickness, thickness * X_PER_Y, length, 1f, 1f, 1f, 1f);
 
-  public void drawHotbar(ShaderProgram colorShader, ShaderProgram texturedShader, TextureAtlas atlas, Hotbar hotbar) {
-    float slotSize = 0.075f;
-    float gap = 0.008f;
-    float totalWidth = Hotbar.SIZE * slotSize + (Hotbar.SIZE - 1) * gap;
-    float startX = -totalWidth * 0.5f;
-    float y = -0.9f;
-
-    glDisable(GL_DEPTH_TEST);
-    glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    UiDrawer.end();
+  }
+
+  public static void drawHotbar(ShaderProgram colorShader, ShaderProgram texturedShader, TextureAtlas atlas, Hotbar hotbar) {
+    float slotHeight = 0.13f;
+    float slotWidth = slotHeight * X_PER_Y;
+    float gap = 0.008f;
+    float totalWidth = Hotbar.SIZE * slotWidth + (Hotbar.SIZE - 1) * gap;
+    float startX = -totalWidth * 0.5f;
+    float y = -0.96f;
+    float inset = 0.018f;
+
+    UiDrawer.begin();
 
     for (int i = 0; i < Hotbar.SIZE; i++) {
-      float x = startX + i * (slotSize + gap);
-      float border = i == hotbar.getSelectedSlot() ? 0.004f : 0.002f;
-      float borderAlpha = i == hotbar.getSelectedSlot() ? 1f : 0.55f;
+      float x = startX + i * (slotWidth + gap);
+      boolean selected = i == hotbar.getSelectedSlot();
 
-      drawColoredQuad(colorShader, x - border, y - border, x + slotSize + border, y + slotSize + border,
-          0f, 0f, 0f, 0.72f * borderAlpha);
-      drawColoredQuad(colorShader, x, y, x + slotSize, y + slotSize, 0.55f, 0.55f, 0.55f, 0.92f);
-
-      byte block = hotbar.getSlot(i);
-      int icon = Block.getIconIndex(block);
-      drawTexturedQuad(texturedShader, atlas, x + 0.01f, y + 0.01f, x + slotSize - 0.01f, y + slotSize - 0.01f,
-          atlas.u0(icon), atlas.v0(icon), atlas.u1(icon), atlas.v1(icon));
+      UiDrawer.fill(colorShader, x, y, x + slotWidth, y + slotHeight, 0.15f, 0.15f, 0.15f, 0.6f);
+      if (selected) {
+        UiDrawer.outline(colorShader, x - 0.003f, y - 0.005f, x + slotWidth + 0.003f, y + slotHeight + 0.005f,
+            1f, 1f, 1f, 1f);
+      } else {
+        UiDrawer.outline(colorShader, x, y, x + slotWidth, y + slotHeight, 0.05f, 0.05f, 0.05f, 0.8f);
+      }
     }
 
-    glDisable(GL_BLEND);
-    glEnable(GL_DEPTH_TEST);
+    texturedShader.use();
+    texturedShader.setTextureUnit(0);
+    texturedShader.setColor(1f, 1f, 1f, 1f);
+    glActiveTexture(GL_TEXTURE0);
+    atlas.bind();
+
+    for (int i = 0; i < Hotbar.SIZE; i++) {
+      float x = startX + i * (slotWidth + gap);
+      int icon = Block.getIconIndex(hotbar.getSlot(i));
+      UiDrawer.texturedQuad(
+          x + inset * X_PER_Y, y + inset, x + slotWidth - inset * X_PER_Y, y + slotHeight - inset,
+          TextureAtlas.u0(icon), TextureAtlas.v0(icon), TextureAtlas.u1(icon), TextureAtlas.v1(icon)
+      );
+    }
+
+    UiDrawer.end();
   }
 
-  public void drawBreakProgress(ShaderProgram shader, float progress) {
+  public static void drawBreakProgress(ShaderProgram shader, float progress) {
     if (progress <= 0f) {
       return;
     }
 
-    float size = 0.035f;
-    float filled = size * progress;
+    float halfWidth = 0.06f * X_PER_Y;
+    float y0 = -0.07f;
+    float y1 = y0 + 0.012f;
 
-    shader.use();
-    glDisable(GL_DEPTH_TEST);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
-    shader.setColor(1f, 1f, 1f, 0.85f);
-    drawColoredQuad(shader, -size, -size - 0.06f, size, -size - 0.06f + 0.006f, 1f, 1f, 1f, 0.85f);
-    shader.setColor(0.2f, 0.2f, 0.2f, 0.9f);
-    drawColoredQuad(shader, -size, -size - 0.06f, -size + filled * 2f, -size - 0.06f + 0.006f, 0.2f, 0.2f, 0.2f, 0.9f);
-
-    glDisable(GL_BLEND);
-    glEnable(GL_DEPTH_TEST);
-  }
-
-  public void drawPauseOverlay(ShaderProgram shader) {
-    shader.use();
-    shader.setColor(0f, 0f, 0f, 0.45f);
-
-    glDisable(GL_DEPTH_TEST);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    drawColoredQuad(shader, -1f, -1f, 1f, 1f, 0f, 0f, 0f, 0.45f);
-    glDisable(GL_BLEND);
-    glEnable(GL_DEPTH_TEST);
-  }
-
-  private void drawColoredQuad(
-      ShaderProgram shader,
-      float x0, float y0, float x1, float y1,
-      float r, float g, float b, float a
-  ) {
-    float[] vertices = {
-        x0, y0,  x1, y0,  x1, y1,
-        x0, y0,  x1, y1,  x0, y1,
-    };
-
-    shader.use();
-    shader.setColor(r, g, b, a);
-
-    int vao = glGenVertexArrays();
-    int vbo = glGenBuffers();
-
-    glBindVertexArray(vao);
-    glBindBuffer(GL_ARRAY_BUFFER, vbo);
-    glBufferData(GL_ARRAY_BUFFER, vertices, GL_STATIC_DRAW);
-    glVertexAttribPointer(0, 2, GL_FLOAT, false, 2 * Float.BYTES, 0);
-    glEnableVertexAttribArray(0);
-    glDrawArrays(GL_TRIANGLES, 0, 6);
-    glBindVertexArray(0);
-
-    glDeleteBuffers(vbo);
-    glDeleteVertexArrays(vao);
-  }
-
-  private void drawTexturedQuad(
-      ShaderProgram shader,
-      TextureAtlas atlas,
-      float x0, float y0, float x1, float y1,
-      float u0, float v0, float u1, float v1
-  ) {
-    float[] vertices = {
-        x0, y0, u0, v0,
-        x1, y0, u1, v0,
-        x1, y1, u1, v1,
-        x0, y0, u0, v0,
-        x1, y1, u1, v1,
-        x0, y1, u0, v1,
-    };
-
-    shader.use();
-    shader.setTextureUnit(0);
-    shader.setColor(1f, 1f, 1f, 1f);
-    glActiveTexture(GL_TEXTURE0);
-    atlas.bind();
-
-    glBindVertexArray(quadVao);
-    glBindBuffer(GL_ARRAY_BUFFER, quadVbo);
-    glBufferData(GL_ARRAY_BUFFER, vertices, GL_DYNAMIC_DRAW);
-    glDrawArrays(GL_TRIANGLES, 0, 6);
-    glBindVertexArray(0);
-  }
-
-  public void delete() {
-    glDeleteBuffers(crosshairVbo);
-    glDeleteVertexArrays(crosshairVao);
-    glDeleteBuffers(quadVbo);
-    glDeleteVertexArrays(quadVao);
+    UiDrawer.begin();
+    UiDrawer.fill(shader, -halfWidth, y0, halfWidth, y1, 0f, 0f, 0f, 0.6f);
+    UiDrawer.fill(shader, -halfWidth, y0, -halfWidth + 2f * halfWidth * Math.min(1f, progress), y1,
+        1f, 1f, 1f, 0.9f);
+    UiDrawer.end();
   }
 }

@@ -6,11 +6,14 @@ import com.mineandcraft.world.World;
 
 public class BlockBreaker {
 
+  /** Пауза после разрушения, чтобы при зажатой кнопке блоки не исчезали очередью. */
+  private static final float COOLDOWN = 0.15f;
+
   private int targetX = Integer.MIN_VALUE;
   private int targetY;
   private int targetZ;
-  private byte targetBlock;
   private float progress;
+  private float cooldown;
 
   public float getProgress() {
     return progress;
@@ -21,30 +24,31 @@ public class BlockBreaker {
     progress = 0f;
   }
 
-  public void update(World world, Raycast.Hit hit, boolean breaking, float deltaTime) {
+  /** Возвращает true, если в этом кадре блок был разрушен. */
+  public boolean update(World world, Raycast.Hit hit, boolean breaking, float deltaTime) {
+    cooldown = Math.max(0f, cooldown - deltaTime);
+
     if (!breaking || hit == null || !hit.hit()) {
       reset();
-      return;
+      return false;
     }
 
     byte block = world.getBlock(hit.blockX(), hit.blockY(), hit.blockZ());
-    if (!Block.isBreakable(block)) {
+    float hardness = Block.getHardness(block);
+    if (!Block.isBreakable(block) || hardness < 0f) {
       reset();
-      return;
+      return false;
     }
 
     if (hit.blockX() != targetX || hit.blockY() != targetY || hit.blockZ() != targetZ) {
       targetX = hit.blockX();
       targetY = hit.blockY();
       targetZ = hit.blockZ();
-      targetBlock = block;
       progress = 0f;
     }
 
-    float hardness = Block.getHardness(targetBlock);
-    if (hardness < 0f) {
-      reset();
-      return;
+    if (cooldown > 0f) {
+      return false;
     }
 
     progress += deltaTime / hardness;
@@ -52,6 +56,10 @@ public class BlockBreaker {
     if (progress >= 1f) {
       world.setBlock(targetX, targetY, targetZ, Block.AIR);
       reset();
+      cooldown = COOLDOWN;
+      return true;
     }
+
+    return false;
   }
 }

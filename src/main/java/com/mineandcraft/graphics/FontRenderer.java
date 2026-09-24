@@ -27,7 +27,7 @@ public class FontRenderer {
   }
 
   private static final String CHARSET =
-      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.: -/%+"
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.,:;!?()[]<>=_'\" -/%+#|—×"
           + "АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯабвгдеёжзийклмнопрстуфхцчшщъыьэюя";
 
   private final int textureId;
@@ -35,6 +35,7 @@ public class FontRenderer {
   private final int textureHeight;
   private final float pixelHeight;
   private final Map<Character, Glyph> glyphs = new HashMap<>();
+  private float[] batch = new float[24 * 64];
 
   public FontRenderer(int fontSize) {
     Font font = new Font("SansSerif", Font.BOLD, fontSize);
@@ -104,13 +105,14 @@ public class FontRenderer {
     for (int i = 0; i < text.length(); i++) {
       Glyph glyph = glyphs.get(text.charAt(i));
       if (glyph != null) {
-        width += glyph.width * scale;
+        width += glyph.width * scale / pixelHeight;
       }
     }
 
     return width;
   }
 
+  /** Рисует текст; левый нижний угол первой строки в (x, y). '\n' переносит строку вниз. */
   public void drawText(
       ShaderProgram shader,
       String text,
@@ -132,47 +134,47 @@ public class FontRenderer {
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, textureId);
 
+    int needed = text.length() * 24;
+    if (batch.length < needed) {
+      batch = new float[needed];
+    }
+
     float cursorX = x;
+    float cursorY = y;
     float glyphScale = scale / pixelHeight;
+    int index = 0;
 
     for (int i = 0; i < text.length(); i++) {
-      Glyph glyph = glyphs.get(text.charAt(i));
+      char character = text.charAt(i);
+      if (character == '\n') {
+        cursorX = x;
+        cursorY -= scale * 1.15f;
+        continue;
+      }
+
+      Glyph glyph = glyphs.get(character);
       if (glyph == null) {
         continue;
       }
 
       float w = glyph.width * glyphScale;
       float h = glyph.height * glyphScale;
-      drawGlyph(shader, cursorX, y, cursorX + w, y + h, glyph);
-      cursorX += w;
+      float x1 = cursorX + w;
+      float y1 = cursorY + h;
+
+      // В атласе строки идут сверху вниз (v0 — верх глифа), а ось Y экрана направлена вверх.
+      index = UiDrawer.putVertex(batch, index, cursorX, cursorY, glyph.u0, glyph.v1);
+      index = UiDrawer.putVertex(batch, index, x1, cursorY, glyph.u1, glyph.v1);
+      index = UiDrawer.putVertex(batch, index, x1, y1, glyph.u1, glyph.v0);
+      index = UiDrawer.putVertex(batch, index, cursorX, cursorY, glyph.u0, glyph.v1);
+      index = UiDrawer.putVertex(batch, index, x1, y1, glyph.u1, glyph.v0);
+      index = UiDrawer.putVertex(batch, index, cursorX, y1, glyph.u0, glyph.v0);
+      cursorX = x1;
     }
-  }
 
-  private void drawGlyph(ShaderProgram shader, float x0, float y0, float x1, float y1, Glyph glyph) {
-    float[] vertices = {
-        x0, y0, glyph.u0, glyph.v0,
-        x1, y0, glyph.u1, glyph.v0,
-        x1, y1, glyph.u1, glyph.v1,
-        x0, y0, glyph.u0, glyph.v0,
-        x1, y1, glyph.u1, glyph.v1,
-        x0, y1, glyph.u0, glyph.v1,
-    };
-
-    int vao = glGenVertexArrays();
-    int vbo = glGenBuffers();
-
-    glBindVertexArray(vao);
-    glBindBuffer(GL_ARRAY_BUFFER, vbo);
-    glBufferData(GL_ARRAY_BUFFER, vertices, GL_DYNAMIC_DRAW);
-    glVertexAttribPointer(0, 2, GL_FLOAT, false, 4 * Float.BYTES, 0);
-    glEnableVertexAttribArray(0);
-    glVertexAttribPointer(1, 2, GL_FLOAT, false, 4 * Float.BYTES, 2 * Float.BYTES);
-    glEnableVertexAttribArray(1);
-    glDrawArrays(GL_TRIANGLES, 0, 6);
-    glBindVertexArray(0);
-
-    glDeleteBuffers(vbo);
-    glDeleteVertexArrays(vao);
+    if (index > 0) {
+      UiDrawer.drawTextured(batch, index / 4);
+    }
   }
 
   public void delete() {

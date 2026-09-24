@@ -1,6 +1,7 @@
 package com.mineandcraft.ui;
 
 import com.mineandcraft.config.GameSettings;
+import com.mineandcraft.engine.Input;
 import com.mineandcraft.config.SettingsIO;
 import com.mineandcraft.graphics.FontRenderer;
 import com.mineandcraft.graphics.ShaderProgram;
@@ -105,6 +106,11 @@ public class UiManager {
         sliderX, -0.46f, 0.68f, 0.07f,
         settings::isShowDebug, settings::setShowDebug
     ));
+    toggles.add(new UiToggle(
+        "Прямой ввод мыши",
+        sliderX, -0.58f, 0.68f, 0.07f,
+        settings::isRawMouseInput, settings::setRawMouseInput
+    ));
   }
 
   public Screen getScreen() {
@@ -144,25 +150,24 @@ public class UiManager {
     onSettingsApplied.run();
   }
 
-  public void handleKey(long window, int key) {
-    if (key == GLFW.GLFW_KEY_ESCAPE) {
-      togglePause();
-      sleepKey(window, GLFW.GLFW_KEY_ESCAPE);
+  /** Открывает меню паузы (например, при потере фокуса окном). */
+  public void pause() {
+    if (screen == Screen.GAME) {
+      screen = Screen.PAUSE;
     }
   }
 
-  public void updateMouse(long window, int windowWidth, int windowHeight) {
-    if (!isMenuOpen()) {
+  /**
+   * @param scaleX масштаб UI по X (как в uniform uScale шейдеров), нужен для пересчёта координат мыши
+   */
+  public void updateMouse(Input input, int windowWidth, int windowHeight, float scaleX, float scaleY) {
+    if (!isMenuOpen() || windowWidth == 0 || windowHeight == 0) {
       mousePressed = false;
       return;
     }
 
-    double[] x = new double[1];
-    double[] y = new double[1];
-    GLFW.glfwGetCursorPos(window, x, y);
-
-    mouseX = toNdcX((float) x[0], windowWidth);
-    mouseY = toNdcY((float) y[0], windowHeight);
+    mouseX = toNdcX((float) input.getCursorX(), windowWidth) / scaleX;
+    mouseY = toNdcY((float) input.getCursorY(), windowHeight) / scaleY;
 
     List<UiButton> buttons = screen == Screen.PAUSE ? pauseButtons : settingsButtons;
     for (UiButton button : buttons) {
@@ -173,7 +178,7 @@ public class UiManager {
       toggle.updateHover(mouseX, mouseY);
     }
 
-    boolean down = GLFW.glfwGetMouseButton(window, GLFW.GLFW_MOUSE_BUTTON_LEFT) == GLFW.GLFW_PRESS;
+    boolean down = input.isMouseDown(GLFW.GLFW_MOUSE_BUTTON_LEFT);
 
     if (down && !mousePressed) {
       for (UiButton button : buttons) {
@@ -216,7 +221,8 @@ public class UiManager {
     }
 
     UiDrawer.begin();
-    UiDrawer.fill(colorShader, -1f, -1f, 1f, 1f, 0f, 0f, 0f, 0.55f);
+    // С запасом за пределы [-1, 1]: при масштабировании UI затемнение всё равно покрывает всё окно.
+    UiDrawer.fill(colorShader, -10f, -10f, 10f, 10f, 0f, 0f, 0f, 0.55f);
 
     if (screen == Screen.PAUSE) {
       renderPause(colorShader, textShader);
@@ -238,6 +244,12 @@ public class UiManager {
     for (UiButton button : pauseButtons) {
       button.render(colorShader, textShader, font);
     }
+
+    String help = "WASD — ходьба   Пробел — прыжок   Ctrl — бег   F — полёт   Shift — вниз в полёте\n"
+        + "ЛКМ — ломать   ПКМ — ставить   СКМ — выбрать блок   1-9 / колесо — слот   F3 — отладка";
+    float helpScale = 0.024f;
+    float helpWidth = font.measureText(help.substring(0, help.indexOf('\n')), helpScale);
+    font.drawText(textShader, help, -helpWidth * 0.5f, -0.4f, helpScale, 0.85f, 0.85f, 0.9f, 1f);
   }
 
   private void renderSettings(ShaderProgram colorShader, ShaderProgram textShader) {
@@ -266,9 +278,18 @@ public class UiManager {
       return;
     }
 
+    float scale = 0.032f;
+    String[] lines = text.split("\n");
+    float width = 0f;
+    for (String line : lines) {
+      width = Math.max(width, font.measureText(line, scale));
+    }
+    float top = 0.97f;
+    float bottom = top - lines.length * scale * 1.15f - 0.02f;
+
     UiDrawer.begin();
-    UiDrawer.fill(colorShader, -0.99f, 0.82f, -0.45f, 0.98f, 0f, 0f, 0f, 0.45f);
-    font.drawText(textShader, text, -0.97f, 0.84f, 0.022f, 0.95f, 0.95f, 0.95f, 1f);
+    UiDrawer.fill(colorShader, -0.99f, bottom, -0.95f + width, top + 0.01f, 0f, 0f, 0f, 0.45f);
+    font.drawText(textShader, text, -0.97f, top - scale, scale, 0.95f, 0.95f, 0.95f, 1f);
     UiDrawer.end();
   }
 
@@ -285,11 +306,5 @@ public class UiManager {
 
   private static float toNdcY(float pixelY, int height) {
     return 1f - pixelY / height * 2f;
-  }
-
-  private static void sleepKey(long window, int key) {
-    while (GLFW.glfwGetKey(window, key) == GLFW.GLFW_PRESS) {
-      GLFW.glfwPollEvents();
-    }
   }
 }

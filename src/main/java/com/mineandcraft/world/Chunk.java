@@ -2,14 +2,25 @@ package com.mineandcraft.world;
 
 public class Chunk {
 
+  public static final int VOLUME = World.CHUNK_SIZE * World.HEIGHT * World.CHUNK_SIZE;
+
   private final int chunkX;
   private final int chunkZ;
-  private final byte[][][] blocks = new byte[World.CHUNK_SIZE][World.HEIGHT][World.CHUNK_SIZE];
-  private boolean generated;
+  private final byte[] blocks;
+  private boolean modified;
 
   public Chunk(int chunkX, int chunkZ) {
+    this(chunkX, chunkZ, new byte[VOLUME]);
+  }
+
+  Chunk(int chunkX, int chunkZ, byte[] blocks) {
+    if (blocks.length != VOLUME) {
+      throw new IllegalArgumentException("Chunk data must have " + VOLUME + " bytes, got " + blocks.length);
+    }
+
     this.chunkX = chunkX;
     this.chunkZ = chunkZ;
+    this.blocks = blocks;
   }
 
   public int getChunkX() {
@@ -20,12 +31,17 @@ public class Chunk {
     return chunkZ;
   }
 
-  public boolean isGenerated() {
-    return generated;
+  public long key() {
+    return World.chunkKey(chunkX, chunkZ);
   }
 
-  public void setGenerated() {
-    generated = true;
+  /** Чанк отличается от того, что выдал бы генератор, и его нужно сохранить. */
+  public boolean isModified() {
+    return modified;
+  }
+
+  void setModified(boolean modified) {
+    this.modified = modified;
   }
 
   public byte getLocal(int localX, int localY, int localZ) {
@@ -35,7 +51,7 @@ public class Chunk {
       return Block.AIR;
     }
 
-    return blocks[localX][localY][localZ];
+    return blocks[index(localX, localY, localZ)];
   }
 
   public void setLocal(int localX, int localY, int localZ, byte block) {
@@ -45,6 +61,15 @@ public class Chunk {
       return;
     }
 
-    blocks[localX][localY][localZ] = block;
+    blocks[index(localX, localY, localZ)] = block;
+  }
+
+  /** Сырые данные для сохранения. Не изменять снаружи пакета. */
+  byte[] rawData() {
+    return blocks;
+  }
+
+  static int index(int localX, int localY, int localZ) {
+    return (localY * World.CHUNK_SIZE + localZ) * World.CHUNK_SIZE + localX;
   }
 }

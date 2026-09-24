@@ -1,7 +1,6 @@
 package com.mineandcraft.player;
 
 import com.mineandcraft.world.Block;
-import org.lwjgl.glfw.GLFW;
 
 public class Hotbar {
 
@@ -11,12 +10,12 @@ public class Hotbar {
       Block.GRASS,
       Block.DIRT,
       Block.STONE,
+      Block.COBBLESTONE,
       Block.WOOD,
       Block.PLANKS,
+      Block.GLASS,
       Block.SAND,
-      Block.LEAVES,
-      Block.STONE,
-      Block.DIRT
+      Block.LEAVES
   };
 
   private int selected;
@@ -33,6 +32,7 @@ public class Hotbar {
     return slots[index];
   }
 
+  /** Прокрутка колёсика: вверх — предыдущий слот, вниз — следующий, по кругу. */
   public void scroll(int delta) {
     if (delta > 0) {
       selected = (selected + SIZE - 1) % SIZE;
@@ -47,18 +47,22 @@ public class Hotbar {
     }
   }
 
-  public void handleKeys(long window) {
+  /**
+   * «Выбор блока» средней кнопкой: если блок уже есть в хотбаре — переключаемся на него,
+   * иначе кладём его в текущий слот.
+   */
+  public void pick(byte block) {
+    if (!Block.isBreakable(block)) {
+      return;
+    }
+
     for (int i = 0; i < SIZE; i++) {
-      if (GLFW.glfwGetKey(window, GLFW.GLFW_KEY_1 + i) == GLFW.GLFW_PRESS) {
-        selectSlot(i);
-        sleepKey(window, GLFW.GLFW_KEY_1 + i);
+      if (slots[i] == block) {
+        selected = i;
+        return;
       }
     }
-  }
 
-  private static void sleepKey(long window, int key) {
-    while (GLFW.glfwGetKey(window, key) == GLFW.GLFW_PRESS) {
-      GLFW.glfwPollEvents();
-    }
+    slots[selected] = block;
   }
 }

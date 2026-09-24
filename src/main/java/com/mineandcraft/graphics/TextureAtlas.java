@@ -34,7 +34,7 @@ public class TextureAtlas {
     int height = TILE_SIZE * ROWS;
     ByteBuffer pixels = ByteBuffer.allocateDirect(width * height * 4);
 
-    copyTile(pixels, 0, loadResourceTile("textures/grass.png"));
+    copyTile(pixels, 0, grassTop());
     copyTile(pixels, 1, generateGrassSide());
     copyTile(pixels, 2, generateDirt());
     copyTile(pixels, 3, generateStone());
@@ -44,6 +44,11 @@ public class TextureAtlas {
     copyTile(pixels, 7, generateSand());
     copyTile(pixels, 8, generateBedrock());
     copyTile(pixels, 9, generatePlanks());
+    copyTile(pixels, 10, generateCobblestone());
+    copyTile(pixels, 11, generateGlass());
+    copyTile(pixels, 12, generateOre(0x2a, 0x2a, 0x2a, 41));
+    copyTile(pixels, 13, generateOre(0xd8, 0xaf, 0x93, 43));
+    copyTile(pixels, 14, generateNoiseTile(132, 124, 120, 47));
 
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
     glBindTexture(GL_TEXTURE_2D, 0);
@@ -90,15 +95,36 @@ public class TextureAtlas {
     }
   }
 
+  /**
+   * grass.png — почти серая текстура (как grass_block_top в Minecraft), её нужно подкрасить
+   * «цветом биома», иначе трава выглядит как сухая земля.
+   */
+  private static byte[] grassTop() {
+    byte[] tile = loadResourceTile("textures/grass.png");
+    float tintR = 0.56f;
+    float tintG = 0.86f;
+    float tintB = 0.36f;
+
+    for (int i = 0; i < tile.length; i += 4) {
+      float luminance = (0.299f * (tile[i] & 0xFF) + 0.587f * (tile[i + 1] & 0xFF) + 0.114f * (tile[i + 2] & 0xFF)) * 1.55f;
+      tile[i] = (byte) clamp((int) (luminance * tintR), 0, 255);
+      tile[i + 1] = (byte) clamp((int) (luminance * tintG), 0, 255);
+      tile[i + 2] = (byte) clamp((int) (luminance * tintB), 0, 255);
+    }
+
+    return tile;
+  }
+
   private static byte[] generateGrassSide() {
-    byte[] grassTop = loadResourceTile("textures/grass.png");
+    byte[] grassTop = grassTop();
     byte[] dirt = generateDirt();
     byte[] tile = new byte[TILE_SIZE * TILE_SIZE * 4];
 
     for (int y = 0; y < TILE_SIZE; y++) {
       for (int x = 0; x < TILE_SIZE; x++) {
         int index = (y * TILE_SIZE + x) * 4;
-        byte[] source = y < 4 ? grassTop : dirt;
+        // Строка 0 тайла — низ грани, поэтому полоса травы — в последних строках.
+        byte[] source = y >= TILE_SIZE - 4 - (x * 7 % 3 == 0 ? 1 : 0) ? grassTop : dirt;
 
         tile[index] = source[index];
         tile[index + 1] = source[index + 1];
@@ -239,6 +265,77 @@ public class TextureAtlas {
     return tile;
   }
 
+  private static byte[] generateCobblestone() {
+    byte[] tile = new byte[TILE_SIZE * TILE_SIZE * 4];
+    Random random = new Random(29);
+
+    for (int y = 0; y < TILE_SIZE; y++) {
+      for (int x = 0; x < TILE_SIZE; x++) {
+        int index = (y * TILE_SIZE + x) * 4;
+        // Неровная сетка «камней» с тёмными швами.
+        boolean seam = (x + (y / 4 % 2) * 3) % 6 == 0 || y % 4 == 0;
+        int value = seam ? 72 + random.nextInt(12) : 118 + random.nextInt(30);
+
+        tile[index] = (byte) value;
+        tile[index + 1] = (byte) value;
+        tile[index + 2] = (byte) clamp(value + 3, 0, 255);
+        tile[index + 3] = (byte) 255;
+      }
+    }
+
+    return tile;
+  }
+
+  private static byte[] generateGlass() {
+    byte[] tile = new byte[TILE_SIZE * TILE_SIZE * 4];
+
+    for (int y = 0; y < TILE_SIZE; y++) {
+      for (int x = 0; x < TILE_SIZE; x++) {
+        int index = (y * TILE_SIZE + x) * 4;
+        boolean frame = x == 0 || y == 0 || x == TILE_SIZE - 1 || y == TILE_SIZE - 1;
+        boolean glint = (x == y + 3 || x == y + 4) && x > 5 && x < 11;
+
+        if (!frame && !glint) {
+          tile[index + 3] = 0;
+          continue;
+        }
+
+        tile[index] = (byte) 205;
+        tile[index + 1] = (byte) 230;
+        tile[index + 2] = (byte) 235;
+        tile[index + 3] = (byte) 255;
+      }
+    }
+
+    return tile;
+  }
+
+  private static byte[] generateOre(int r, int g, int b, int seed) {
+    byte[] tile = generateStone();
+    Random random = new Random(seed);
+
+    for (int spot = 0; spot < 6; spot++) {
+      int cx = 2 + random.nextInt(TILE_SIZE - 4);
+      int cy = 2 + random.nextInt(TILE_SIZE - 4);
+
+      for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+          if (Math.abs(dx) + Math.abs(dy) > 1 && random.nextBoolean()) {
+            continue;
+          }
+
+          int index = ((cy + dy) * TILE_SIZE + cx + dx) * 4;
+          int noise = random.nextInt(20) - 10;
+          tile[index] = (byte) clamp(r + noise, 0, 255);
+          tile[index + 1] = (byte) clamp(g + noise, 0, 255);
+          tile[index + 2] = (byte) clamp(b + noise, 0, 255);
+        }
+      }
+    }
+
+    return tile;
+  }
+
   private static byte[] generateNoiseTile(int r, int g, int b, int seed) {
     byte[] tile = new byte[TILE_SIZE * TILE_SIZE * 4];
     Random random = new Random(seed);
@@ -299,19 +396,23 @@ public class TextureAtlas {
     glBindTexture(GL_TEXTURE_2D, id);
   }
 
-  public float u0(int atlasIndex) {
+  public void delete() {
+    glDeleteTextures(id);
+  }
+
+  public static float u0(int atlasIndex) {
     return (atlasIndex % COLS) / (float) COLS;
   }
 
-  public float u1(int atlasIndex) {
+  public static float u1(int atlasIndex) {
     return (atlasIndex % COLS + 1) / (float) COLS;
   }
 
-  public float v0(int atlasIndex) {
+  public static float v0(int atlasIndex) {
     return (atlasIndex / COLS) / (float) ROWS;
   }
 
-  public float v1(int atlasIndex) {
+  public static float v1(int atlasIndex) {
     return (atlasIndex / COLS + 1) / (float) ROWS;
   }
 }

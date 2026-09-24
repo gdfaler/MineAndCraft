@@ -4,146 +4,96 @@ import com.mineandcraft.engine.Vec3;
 import com.mineandcraft.world.Block;
 import com.mineandcraft.world.World;
 
+/**
+ * Перемещение AABB игрока с коллизиями: движение раскладывается по осям, каждая ось
+ * проходится шагами не длиннее MAX_STEP, чтобы на большой скорости не проскочить сквозь блок.
+ */
 public final class PlayerCollision {
 
-  private static final float SKIN = 0.001f;
-  private static final int MAX_DEPENETRATION_STEPS = 8;
+  public static final int AXIS_X = 0;
+  public static final int AXIS_Y = 1;
+  public static final int AXIS_Z = 2;
+
+  private static final float EPSILON = 0.001f;
+  private static final float MAX_STEP = 0.45f;
 
   private PlayerCollision() {
   }
 
-  public record VerticalResult(float velocityY, boolean onGround) {
-  }
+  /**
+   * Сдвигает позицию по оси и возвращает true, если движение упёрлось в блок.
+   * Позиция — центр основания AABB (ноги игрока).
+   */
+  public static boolean move(World world, Vec3 position, int axis, float delta, float halfWidth, float height) {
+    boolean collided = false;
+    float remaining = delta;
 
-  public static void resolveHorizontal(World world, Vec3 position, float halfWidth, float height) {
-    for (int step = 0; step < MAX_DEPENETRATION_STEPS; step++) {
-      if (!resolveHorizontalStep(world, position, halfWidth, height)) {
-        break;
-      }
+    while (remaining != 0f && !collided) {
+      float step = Math.max(-MAX_STEP, Math.min(MAX_STEP, remaining));
+      remaining -= step;
+      collided = moveStep(world, position, axis, step, halfWidth, height);
     }
+
+    return collided;
   }
 
-  public static VerticalResult resolveVertical(
-      World world,
-      Vec3 position,
-      float velocityY,
-      float halfWidth,
-      float height
-  ) {
-    float velY = velocityY;
-    boolean onGround = false;
+  private static boolean moveStep(World world, Vec3 position, int axis, float step, float halfWidth, float height) {
+    set(position, axis, get(position, axis) + step);
 
-    for (int x = blockMinX(position.x, halfWidth); x <= blockMaxX(position.x, halfWidth); x++) {
-      for (int z = blockMinZ(position.z, halfWidth); z <= blockMaxZ(position.z, halfWidth); z++) {
-        for (int y = blockMinY(position.y); y <= blockMaxY(position.y, height); y++) {
+    float minX = position.x - halfWidth;
+    float maxX = position.x + halfWidth;
+    float minY = position.y;
+    float maxY = position.y + height;
+    float minZ = position.z - halfWidth;
+    float maxZ = position.z + halfWidth;
+
+    // По осям, вдоль которых не движемся, чуть сужаем коробку: иначе стоящий вплотную блок
+    // считался бы пересечением.
+    int x0 = floor(minX + (axis == AXIS_X ? 0 : EPSILON));
+    int x1 = floor(maxX - (axis == AXIS_X ? 0 : EPSILON));
+    int y0 = floor(minY + (axis == AXIS_Y ? 0 : EPSILON));
+    int y1 = floor(maxY - (axis == AXIS_Y ? 0 : EPSILON));
+    int z0 = floor(minZ + (axis == AXIS_Z ? 0 : EPSILON));
+    int z1 = floor(maxZ - (axis == AXIS_Z ? 0 : EPSILON));
+
+    boolean collided = false;
+    float limit = step > 0 ? Float.POSITIVE_INFINITY : Float.NEGATIVE_INFINITY;
+
+    for (int x = x0; x <= x1; x++) {
+      for (int y = y0; y <= y1; y++) {
+        for (int z = z0; z <= z1; z++) {
           if (!Block.isSolid(world.getBlock(x, y, z))) {
             continue;
           }
 
-          float playerBottom = position.y;
-          float playerTop = position.y + height;
-          float blockTop = y + 1f;
-          float blockBottom = y;
-
-          if (playerTop <= blockBottom + SKIN || playerBottom >= blockTop - SKIN) {
-            continue;
-          }
-
-          float pushUp = blockTop - playerBottom;
-          float pushDown = playerTop - blockBottom;
-
-          if (velY <= 0f && pushUp < pushDown) {
-            position.y = blockTop + SKIN;
-            velY = 0f;
-            onGround = true;
-          } else if (velY > 0f && pushDown < pushUp) {
-            position.y = blockBottom - height - SKIN;
-            velY = 0f;
-          }
+          int blockCoord = axis == AXIS_X ? x : axis == AXIS_Y ? y : z;
+          collided = true;
+          limit = step > 0 ? Math.min(limit, blockCoord) : Math.max(limit, blockCoord + 1);
         }
       }
     }
 
-    return new VerticalResult(velY, onGround);
-  }
-
-  public static void depenetrate(World world, Vec3 position, float halfWidth, float height) {
-    for (int step = 0; step < MAX_DEPENETRATION_STEPS; step++) {
-      float bestOverlap = Float.MAX_VALUE;
-      int bestX = 0;
-      int bestY = 0;
-      int bestZ = 0;
-      int bestAxis = -1;
-
-      for (int x = blockMinX(position.x, halfWidth); x <= blockMaxX(position.x, halfWidth); x++) {
-        for (int z = blockMinZ(position.z, halfWidth); z <= blockMaxZ(position.z, halfWidth); z++) {
-          for (int y = blockMinY(position.y); y <= blockMaxY(position.y, height); y++) {
-            if (!Block.isSolid(world.getBlock(x, y, z))) {
-              continue;
-            }
-
-            float overlapX = Math.min(position.x + halfWidth - x, x + 1f - (position.x - halfWidth));
-            float overlapZ = Math.min(position.z + halfWidth - z, z + 1f - (position.z - halfWidth));
-            float overlapY = Math.min(position.y + height - y, y + 1f - position.y);
-
-            if (overlapX <= 0f || overlapZ <= 0f || overlapY <= 0f) {
-              continue;
-            }
-
-            if (overlapX < bestOverlap) {
-              bestOverlap = overlapX;
-              bestX = x;
-              bestY = y;
-              bestZ = z;
-              bestAxis = 0;
-            }
-            if (overlapZ < bestOverlap) {
-              bestOverlap = overlapZ;
-              bestX = x;
-              bestY = y;
-              bestZ = z;
-              bestAxis = 2;
-            }
-            if (overlapY < bestOverlap) {
-              bestOverlap = overlapY;
-              bestX = x;
-              bestY = y;
-              bestZ = z;
-              bestAxis = 1;
-            }
-          }
-        }
-      }
-
-      if (bestAxis < 0) {
-        return;
-      }
-
-      switch (bestAxis) {
-        case 0 -> position.x += position.x < bestX + 0.5f
-            ? -bestOverlap - SKIN
-            : bestOverlap + SKIN;
-        case 2 -> position.z += position.z < bestZ + 0.5f
-            ? -bestOverlap - SKIN
-            : bestOverlap + SKIN;
-        case 1 -> {
-          if (position.y + height * 0.5f < bestY + 0.5f) {
-            position.y = bestY - height - SKIN;
-          } else {
-            position.y = bestY + 1f + SKIN;
-          }
-        }
-        default -> {
-          return;
-        }
-      }
+    if (!collided) {
+      return false;
     }
+
+    float extentBelow = axis == AXIS_Y ? 0 : halfWidth;
+    float extentAbove = axis == AXIS_Y ? height : halfWidth;
+    set(position, axis, step > 0 ? limit - extentAbove - EPSILON : limit + extentBelow + EPSILON);
+    return true;
   }
 
-  public static boolean isInsideSolid(World world, Vec3 position, float halfWidth, float height) {
-    for (int x = blockMinX(position.x, halfWidth); x <= blockMaxX(position.x, halfWidth); x++) {
-      for (int z = blockMinZ(position.z, halfWidth); z <= blockMaxZ(position.z, halfWidth); z++) {
-        for (int y = blockMinY(position.y); y <= blockMaxY(position.y, height); y++) {
+  public static boolean intersectsSolid(World world, Vec3 position, float halfWidth, float height) {
+    int x0 = floor(position.x - halfWidth + EPSILON);
+    int x1 = floor(position.x + halfWidth - EPSILON);
+    int y0 = floor(position.y + EPSILON);
+    int y1 = floor(position.y + height - EPSILON);
+    int z0 = floor(position.z - halfWidth + EPSILON);
+    int z1 = floor(position.z + halfWidth - EPSILON);
+
+    for (int x = x0; x <= x1; x++) {
+      for (int y = y0; y <= y1; y++) {
+        for (int z = z0; z <= z1; z++) {
           if (Block.isSolid(world.getBlock(x, y, z))) {
             return true;
           }
@@ -154,59 +104,26 @@ public final class PlayerCollision {
     return false;
   }
 
-  private static boolean resolveHorizontalStep(World world, Vec3 position, float halfWidth, float height) {
-    boolean resolved = false;
+  /** Пересекается ли AABB игрока с единичным блоком (x, y, z). */
+  public static boolean intersectsBlock(Vec3 position, float halfWidth, float height, int x, int y, int z) {
+    return x + 1f > position.x - halfWidth && x < position.x + halfWidth
+        && y + 1f > position.y && y < position.y + height
+        && z + 1f > position.z - halfWidth && z < position.z + halfWidth;
+  }
 
-    for (int x = blockMinX(position.x, halfWidth); x <= blockMaxX(position.x, halfWidth); x++) {
-      for (int z = blockMinZ(position.z, halfWidth); z <= blockMaxZ(position.z, halfWidth); z++) {
-        for (int y = blockMinY(position.y); y <= blockMaxY(position.y, height); y++) {
-          if (!Block.isSolid(world.getBlock(x, y, z))) {
-            continue;
-          }
+  private static float get(Vec3 v, int axis) {
+    return axis == AXIS_X ? v.x : axis == AXIS_Y ? v.y : v.z;
+  }
 
-          float overlapX = Math.min(position.x + halfWidth - x, x + 1f - (position.x - halfWidth));
-          float overlapZ = Math.min(position.z + halfWidth - z, z + 1f - (position.z - halfWidth));
-          float overlapY = Math.min(position.y + height - y, y + 1f - position.y);
-
-          if (overlapX <= 0f || overlapZ <= 0f || overlapY <= 0f) {
-            continue;
-          }
-
-          if (overlapX <= overlapZ) {
-            position.x += position.x < x + 0.5f ? -overlapX - SKIN : overlapX + SKIN;
-          } else {
-            position.z += position.z < z + 0.5f ? -overlapZ - SKIN : overlapZ + SKIN;
-          }
-
-          resolved = true;
-        }
-      }
+  private static void set(Vec3 v, int axis, float value) {
+    switch (axis) {
+      case AXIS_X -> v.x = value;
+      case AXIS_Y -> v.y = value;
+      default -> v.z = value;
     }
-
-    return resolved;
   }
 
-  private static int blockMinX(float x, float halfWidth) {
-    return (int) Math.floor(x - halfWidth);
-  }
-
-  private static int blockMaxX(float x, float halfWidth) {
-    return (int) Math.floor(x + halfWidth);
-  }
-
-  private static int blockMinZ(float z, float halfWidth) {
-    return (int) Math.floor(z - halfWidth);
-  }
-
-  private static int blockMaxZ(float z, float halfWidth) {
-    return (int) Math.floor(z + halfWidth);
-  }
-
-  private static int blockMinY(float y) {
-    return (int) Math.floor(y);
-  }
-
-  private static int blockMaxY(float y, float height) {
-    return (int) Math.floor(y + height);
+  private static int floor(float value) {
+    return (int) Math.floor(value);
   }
 }

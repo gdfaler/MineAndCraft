@@ -1,5 +1,7 @@
 package com.mineandcraft.graphics;
 
+import java.nio.FloatBuffer;
+
 import static org.lwjgl.opengl.GL15.*;
 import static org.lwjgl.opengl.GL20.glEnableVertexAttribArray;
 import static org.lwjgl.opengl.GL20.glVertexAttribPointer;
@@ -58,6 +60,19 @@ public class Mesh {
     glBindBuffer(GL_ARRAY_BUFFER, 0);
   }
 
+  /** Загружает данные из буфера от его position до limit. */
+  public void upload(FloatBuffer vertices) {
+    vertexCount = vertices.remaining() / layout.stride;
+
+    glBindBuffer(GL_ARRAY_BUFFER, vbo);
+    glBufferData(GL_ARRAY_BUFFER, vertices, GL_STATIC_DRAW);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+  }
+
+  public int getVertexCount() {
+    return vertexCount;
+  }
+
   public void render() {
     if (vertexCount == 0) {
       return;
@@ -65,6 +80,16 @@ public class Mesh {
 
     glBindVertexArray(vao);
     glDrawArrays(GL_TRIANGLES, 0, vertexCount);
+    glBindVertexArray(0);
+  }
+
+  public void renderLines() {
+    if (vertexCount == 0) {
+      return;
+    }
+
+    glBindVertexArray(vao);
+    glDrawArrays(GL_LINES, 0, vertexCount);
     glBindVertexArray(0);
   }
 

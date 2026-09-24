@@ -1,13 +1,15 @@
 package com.mineandcraft.config;
 
+import com.mineandcraft.world.World;
+
 public class GameSettings {
 
   public static final float MIN_SENSITIVITY = 0.04f;
   public static final float MAX_SENSITIVITY = 0.28f;
   public static final float MIN_FOV = 60f;
   public static final float MAX_FOV = 100f;
-  public static final int MIN_RENDER_DISTANCE = 4;
-  public static final int MAX_RENDER_DISTANCE = 12;
+  public static final int MIN_RENDER_DISTANCE = World.MIN_VIEW_DISTANCE;
+  public static final int MAX_RENDER_DISTANCE = World.MAX_VIEW_DISTANCE;
   public static final float MIN_SPEED = 0.5f;
   public static final float MAX_SPEED = 2f;
 
@@ -18,6 +20,7 @@ public class GameSettings {
   private boolean vsync = true;
   private boolean showDebug = false;
   private float speedMultiplier = 1f;
+  private boolean rawMouseInput = true;
 
   public float getMouseSensitivity() {
     return mouseSensitivity;
@@ -73,6 +76,14 @@ public class GameSettings {
 
   public void setSpeedMultiplier(float speedMultiplier) {
     this.speedMultiplier = clamp(speedMultiplier, MIN_SPEED, MAX_SPEED);
+  }
+
+  public boolean isRawMouseInput() {
+    return rawMouseInput;
+  }
+
+  public void setRawMouseInput(boolean rawMouseInput) {
+    this.rawMouseInput = rawMouseInput;
   }
 
   private static float clamp(float value, float min, float max) {

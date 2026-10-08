@@ -1,123 +1,119 @@
 # MineAndCraft
 
-Воксельная sandbox-игра в духе Minecraft на Java + LWJGL 3. Мир бесконечный, генерируется по сиду и
-подгружается чанками в фоновых потоках; все изменения сохраняются на диск.
+[![Build](https://github.com/gdfaler/MineAndCraft/actions/workflows/build.yml/badge.svg)](https://github.com/gdfaler/MineAndCraft/actions/workflows/build.yml)
+![Java 21](https://img.shields.io/badge/Java-21-ED8B00?logo=openjdk&logoColor=white)
+![OpenGL 3.3](https://img.shields.io/badge/OpenGL-3.3-5586A4?logo=opengl&logoColor=white)
 
-## Возможности
+A voxel sandbox in the spirit of Minecraft, written from scratch in Java with LWJGL and plain OpenGL. There's no game engine underneath: the world generator, renderer, physics and menus are all in this repo.
 
-- Процедурный мир на шуме Перлина: равнины, холмы и горы, пляжи, леса разной плотности,
-  пещеры-туннели и подземные полости, уголь, железо и гравий.
-- 13 видов блоков, включая прозрачные (стекло, листва).
-- Ambient occlusion на гранях, туман по дальности прорисовки, отсечение невидимых чанков.
-- Физика игрока с коллизиями, спринт, режим полёта.
-- Автосохранение мира и игрока (раз в минуту и при выходе).
-- Меню паузы и настройки, которые сохраняются между запусками.
+<!-- Screenshot goes here: drag an image into the GitHub editor and it inserts the link for you -->
 
-## Требования
+## What's in it
 
-- **JDK 21+**
-- **Maven 3.9+**
-- Windows, Linux или macOS: нужные нативные библиотеки LWJGL подключаются автоматически по ОС
-- Видеокарта с поддержкой OpenGL 3.3
+- **An infinite world from a seed.** Plains, hills, mountains, beaches and forests on the surface. Spaghetti caves, bigger caverns deeper down, coal, iron and gravel underground.
+- **13 block types**, including see-through glass and leaves. Every texture except the grass top is drawn by code at startup instead of being loaded from image files.
+- **Rendering:** smooth ambient occlusion on block corners, distance fog, frustum culling.
+- **Movement:** collisions, jumping, sprinting and a fly mode.
+- **Mining takes time.** Every block has its own hardness. Leaves break almost instantly, ore takes a while, and bedrock doesn't break at all.
+- **Saving.** The world and the player autosave every minute and when you quit. Settings carry over between runs.
 
-## Быстрый старт
+## How it works
+
+The parts I had the most fun with:
+
+- **Chunk streaming.** The world is split into 16×128×16 chunks. Missing chunks are loaded from disk or generated on a pool of up to 4 background threads, nearest first, then handed to the main thread when they're ready.
+- **Deterministic generation.** A chunk depends only on the seed and its coordinates. Trees that cross a chunk border still line up, and a chunk nobody touched never needs saving because it can be regenerated.
+- **Meshing away from OpenGL.** `ChunkMesher` builds the geometry without touching the GPU, skips faces hidden between solid blocks, and flips each quad's diagonal based on its occlusion values so the shading doesn't streak. `WorldRenderer` uploads at most 4 rebuilt chunks per frame to keep the frame rate steady. Blocks you break or place update right away.
+- **Small saves.** Only chunks you've changed get written to disk, one gzip file each.
+
+## Controls
+
+| Action | Key |
+|---|---|
+| Move | `W` `A` `S` `D` |
+| Jump / fly up | `Space` |
+| Fly down | `Shift` |
+| Sprint | `Ctrl` |
+| Toggle flying | `F` |
+| Break block | hold left mouse |
+| Place block | right mouse (hold to keep placing) |
+| Pick the block you're looking at | middle mouse |
+| Hotbar slot | `1`–`9` or mouse wheel |
+| Debug info | `F3` |
+| Pause menu | `Esc` |
+
+The game pauses by itself when the window loses focus.
+
+## Running it
+
+You need **JDK 21+**, **Maven 3.9+** and a GPU with OpenGL 3.3. Maven picks the right LWJGL native libraries for Windows, Linux and macOS (Intel and Apple Silicon).
+
+**Windows and Linux**
 
 ```bash
 mvn compile exec:java
 ```
 
-Параметры запуска:
+**macOS.** GLFW has to run on the process's first thread, so start the built jar with `-XstartOnFirstThread`:
 
 ```bash
-mvn compile exec:java -Dexec.args="--seed 12345"          # сид для нового мира (число или текст)
-mvn compile exec:java -Dexec.args="--world ./my-world"    # другой каталог сохранения
+mvn package -DskipTests
+java -XstartOnFirstThread -jar target/MineAndCraft-0.1.0-all.jar
 ```
 
-Или в IntelliJ IDEA: запустите `com.mineandcraft.Main`.
+In IntelliJ IDEA, run `com.mineandcraft.Main`. On a Mac, add `-XstartOnFirstThread` to the VM options first.
 
-## Управление
+### Options
 
-| Действие | Клавиша |
-|----------|---------|
-| Движение | `W` `A` `S` `D` |
-| Прыжок / вверх в полёте | `Space` |
-| Вниз в полёте | `Shift` |
-| Спринт | `Ctrl` |
-| Полёт вкл/выкл | `F` |
-| Ломать блок | Зажать **ЛКМ** |
-| Ставить блок | **ПКМ** (можно зажать) |
-| Взять блок под прицелом в хотбар | **СКМ** |
-| Слот хотбара | `1`–`9` или **колёсико мыши** |
-| Отладочная информация | `F3` |
-| Пауза / меню | `Escape` |
+| Option | What it does |
+|---|---|
+| `--seed <value>` | Seed for a new world. Numbers are used as-is, and any text works too |
+| `--world <folder>` | Where the world is saved (default: `~/.mineandcraft/world`) |
 
-При потере фокуса окна игра автоматически ставится на паузу.
+With Maven: `mvn compile exec:java -Dexec.args="--seed 12345"`. With the jar, put them after the jar name.
 
-## Меню и настройки
+## Settings and saves
 
-Нажмите **Escape**, чтобы открыть меню паузы:
+`Esc` opens the pause menu with **Resume**, **Settings** and **Quit**. Settings has mouse sensitivity, FOV (60–100), render distance (4–16 chunks), movement speed, fog, VSync, the debug overlay and raw mouse input.
 
-- **Продолжить** — вернуться в игру
-- **Настройки** — чувствительность мыши, FOV, дальность прорисовки (4–16 чанков), скорость движения,
-  туман, VSync, отладочный оверлей, прямой (raw) ввод мыши
-- **Выйти** — сохранить мир и закрыть игру
-
-## Где хранятся данные
-
-Всё лежит в `~/.mineandcraft` (`%USERPROFILE%\.mineandcraft` в Windows):
+Everything is stored in `~/.mineandcraft`:
 
 ```
 .mineandcraft/
-├── settings.properties        # настройки
+├── settings.properties        # your settings
 └── world/
-    ├── level.properties       # сид, позиция и ориентация игрока
-    └── chunks/c.<x>.<z>.dat   # изменённые игроком чанки (gzip)
+    ├── level.properties       # seed, player position and rotation
+    └── chunks/c.<x>.<z>.dat   # chunks you've changed (gzip)
 ```
 
-Сохраняются только чанки, которые игрок изменил: остальные при необходимости заново генерируются из сида.
-Чтобы начать новый мир, удалите каталог `world` или запустите игру с `--world <новый каталог>`.
+To start a new world, delete the `world` folder or run with `--world <new folder>`.
 
-## Структура проекта
-
-```
-src/main/java/com/mineandcraft/
-├── Main.java                 # Точка входа, разбор аргументов
-├── config/                   # Настройки и метаданные мира (сид, игрок)
-├── engine/                   # Игровой цикл (Game), окно, ввод, рейкаст
-│   └── physics/              # Коллизии игрока
-├── graphics/                 # Шейдеры, текстуры, HUD, шрифт, UI-отрисовка
-├── player/                   # Игрок, хотбар, ломание блоков
-├── ui/                       # Меню паузы и экран настроек
-└── world/                    # Блоки, генерация, чанки, хранилище, мешер, рендер
-
-src/test/java/                # Модульные тесты (JUnit 5), не требуют OpenGL
-```
-
-Устройство мира:
-
-- `World` хранит загруженные чанки. Недостающие чанки загружаются с диска или генерируются в пуле
-  фоновых потоков (ближние в первую очередь), а готовые принимаются в главном потоке.
-- `ChunkGenerator` работает детерминированно: результат зависит только от сида и координат,
-  поэтому деревья на стыке чанков строятся согласованно.
-- `ChunkMesher` строит меш без обращения к OpenGL, `WorldRenderer` загружает его в GPU, перестраивая
-  не больше нескольких чанков за кадр. Изменения от игрока перестраиваются сразу.
-
-## Сборка и тесты
+## Tests
 
 ```bash
 mvn verify
 ```
 
-Команда запускает тесты и собирает исполняемый jar со всеми зависимостями под текущую ОС:
-`target/MineAndCraft-<версия>-all.jar`, запуск через `java -jar target/MineAndCraft-0.1.0-all.jar`.
+60 JUnit 5 tests in 11 classes cover world generation, meshing, raycasting, player physics, saving and settings. None of them need a GPU, so GitHub Actions runs them on Ubuntu and Windows on every push. `mvn verify` also builds the runnable jar.
 
-## Технологии
+## Project layout
 
-- [LWJGL 3](https://www.lwjgl.org/) — окно, OpenGL, загрузка изображений
-- [JOML](https://github.com/JOML-CI/JOML) — математика (матрицы, векторы, frustum culling)
-- OpenGL 3.3 Core — рендер мира и интерфейса
-- JUnit 5 — тесты
+```
+src/main/java/com/mineandcraft/
+├── Main.java        # entry point, command-line options
+├── config/          # settings and world metadata
+├── engine/          # game loop, window, input, raycasting
+│   └── physics/     # player collisions
+├── graphics/        # shaders, texture atlas, HUD, font, UI drawing
+├── player/          # player, hotbar, block breaking
+├── ui/              # pause menu and settings screen
+└── world/           # blocks, generation, chunks, storage, mesher, renderer
+```
 
-## Лицензия
+## Built with
 
-Учебный проект. Не является копией Minecraft и не использует его ассеты.
+[LWJGL 3](https://www.lwjgl.org/) (GLFW, OpenGL, stb) · [JOML](https://github.com/JOML-CI/JOML) · JUnit 5 · Maven
+
+---
+
+Made by [Egor](https://github.com/gdfaler) to learn how voxel engines work. A fan project, not affiliated with Mojang or Microsoft, and it uses none of Minecraft's code or assets.
